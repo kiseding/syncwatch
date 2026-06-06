@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/kiseding/syncwatch/internal/media"
@@ -46,7 +47,7 @@ func (h *Handler) Play(w http.ResponseWriter, r *http.Request) {
 	// on slow-to-initialize streams (e.g., m3u8)
 	go func() {
 		if err := h.Room.Play(context.Background(), req.Path, inputType); err != nil {
-			fmt.Printf("[play] error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "[play] ERROR: %v\n", err)
 		}
 	}()
 

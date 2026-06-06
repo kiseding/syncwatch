@@ -261,6 +261,12 @@ func (r *Room) Play(ctx context.Context, filePath, inputType string) error {
 		return fmt.Errorf("start pipeline: %w", err)
 	}
 
+	// Check pipeline didn't crash immediately after start
+	if r.pipeline.Status() != media.StatusRunning {
+		r.state.Store(int32(StateError))
+		return fmt.Errorf("pipeline failed to start")
+	}
+
 	// Start RTP readers
 	r.videoRTP.Start()
 	r.audioRTP.Start()
@@ -401,6 +407,11 @@ func (r *Room) Seek(ctx context.Context, position float64) error {
 	if err := r.pipeline.Start(context.Background()); err != nil {
 		r.state.Store(int32(StateError))
 		return fmt.Errorf("restart pipeline for seek: %w", err)
+	}
+
+	if r.pipeline.Status() != media.StatusRunning {
+		r.state.Store(int32(StateError))
+		return fmt.Errorf("pipeline failed after seek")
 	}
 
 	r.state.Store(int32(StatePlaying))
