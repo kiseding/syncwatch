@@ -6,6 +6,14 @@ import JASSUB from 'jassub';
 const $ = (sel) => document.querySelector(sel);
 
 let pc = null, ws = null, subRenderer = null;
+
+// Debug panel
+function dbg(key, val) {
+  const el = document.getElementById('debug-panel');
+  if (!el) return;
+  el.innerHTML = el.innerHTML.replace(new RegExp(key + ': .*', 'g'), key + ': ' + val);
+  console.log('[dbg]', key, val);
+}
 let reconnectAttempts = 0, reconnectTimer = null;
 const MAX_RECONNECT = 20;
 
@@ -75,14 +83,10 @@ function connectWebSocket() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
 
-  ws.onopen = () => { reconnectAttempts = 0; console.log('[WS] open'); };
+  ws.onopen = () => { reconnectAttempts = 0; dbg('WS', 'open'); };
   ws.onmessage = (e) => handleWSMessage(JSON.parse(e.data));
-  ws.onclose = () => {
-    store.set('connection.status', 'disconnected');
-    updateConnectionUI();
-    scheduleReconnect();
-  };
-  ws.onerror = () => {};
+  ws.onclose = (ev) => { dbg('WS', 'close code='+ev.code); store.set('connection.status', 'disconnected'); updateConnectionUI(); scheduleReconnect(); };
+  ws.onerror = (ev) => { dbg('Error', 'ws error'); };
 }
 
 function scheduleReconnect() {
@@ -114,6 +118,7 @@ async function handleOffer(sdp) {
     pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
 
     pc.ontrack = (event) => {
+      dbg('Track', event.track.kind);
       if (event.track.kind === 'video') {
         $('#main-video').srcObject = event.streams[0];
         hideVideoStatus(); showReconnect(false);
@@ -128,6 +133,7 @@ async function handleOffer(sdp) {
     };
 
     pc.oniceconnectionstatechange = () => {
+      dbg('ICE', pc.iceConnectionState);
       store.set('connection.iceState', pc.iceConnectionState);
       updateConnectionUI();
       if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
@@ -157,7 +163,7 @@ async function handleOffer(sdp) {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'answer', sdp: answer.sdp }));
     }
-  } catch (err) { console.error('[WebRTC]', err); }
+  } catch (err) { dbg('Error', err.message || String(err)); }
 }
 
 async function handleICECandidate(msg) {
@@ -266,7 +272,11 @@ async function loadMedia(path) {
       $('#status-text').textContent = '正在初始化流媒体...';
       for (let i = 0; i < 60; i++) {
         await new Promise(r => setTimeout(r, 1000));
-        try { const s = await api.state(); if (s.state === 'playing') { $('#video-status').classList.add('hidden'); updatePlayerUI(); return; } } catch(e) {}
+        try {
+          const s = await api.state();
+          dbg('Poll', s.state);
+          if (s.state === 'playing') { $('#video-status').classList.add('hidden'); updatePlayerUI(); return; }
+        } catch(e) { dbg('PollErr', e.message); }
       }
       $('#status-text').textContent = '启动超时';
     } else {
@@ -319,6 +329,7 @@ function updateViewerCount(text) {
 
 // ====== Admin ======
 async function updateAdmin() {
+  if (!store.get('token')) return; // skip if not logged in
   try {
     const s = await api.status();
     $('#admin-viewers').textContent = s.viewers || 0;
