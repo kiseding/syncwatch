@@ -289,8 +289,6 @@ function updateConnectionUI() {
   const s = store.get('connection.status');
   const dot = $('#connection-status');
   if (dot) dot.className = 'status-dot ' + s;
-  const reEl = $('#reconnect-overlay');
-  if (reEl) reEl.classList.toggle('hidden', s !== 'connecting' || reconnectAttempts === 0);
 }
 
 function updatePlayerUI() {

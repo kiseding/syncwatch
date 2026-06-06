@@ -71,7 +71,7 @@ func main() {
 	iceServers := buildICEServers(cfg)
 
 	// Core components
-	sfu := webrtc.NewSFU(iceServers)
+	sfu := webrtc.NewSFU(iceServers, cfg.WebRTC.PublicIPs)
 	hub := signaling.NewHub()
 	room := room.NewRoom(sfu, hub, cfg.Media.FFmpegPath, cfg.Media.FFprobePath)
 	room.SetTranscodeConfig(

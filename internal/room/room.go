@@ -267,23 +267,23 @@ func (r *Room) Play(ctx context.Context, filePath, inputType string) error {
 		return fmt.Errorf("pipeline failed to start")
 	}
 
-	// Start RTP readers
+	// Start RTP readers (begin buffering)
 	r.videoRTP.Start()
 	r.audioRTP.Start()
 
-	// Start relays (attach tracks from all current viewers)
+	// Attach all existing viewer tracks to relays FIRST
+	for _, v := range r.sfu.GetAllViewers() {
+		r.videoRelay.AddTrack(v.VideoTrack)
+		r.audioRelay.AddTrack(v.AudioTrack)
+	}
+
+	// Start relays AFTER tracks are attached
 	r.videoRelay.Start()
 	r.audioRelay.Start()
 
 	r.position = 0
 	r.state.Store(int32(StatePlaying))
 	r.lastActive = time.Now()
-
-	// Attach relays to existing viewer tracks
-	for _, v := range r.sfu.GetAllViewers() {
-		r.videoRelay.AddTrack(v.VideoTrack)
-		r.audioRelay.AddTrack(v.AudioTrack)
-	}
 
 	// Broadcast state change
 	r.hub.Broadcast(signaling.Message{

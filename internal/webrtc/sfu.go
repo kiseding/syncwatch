@@ -47,11 +47,25 @@ type SFU struct {
 }
 
 // NewSFU creates a new Selective Forwarding Unit manager.
-func NewSFU(iceServers []pion.ICEServer) *SFU {
+func NewSFU(iceServers []pion.ICEServer, publicIPs []string) *SFU {
 	// Setting engine for proper ICE candidate discovery
 	s := pion.SettingEngine{}
+
+	// Set UDP port range for ICE
+	if err := s.SetEphemeralUDPPortRange(60000, 60100); err == nil {
+		// Port range set
+	}
+
+	// Set public IPs for NAT mapping (helps LAN discovery)
+	if len(publicIPs) > 0 {
+		s.SetNAT1To1IPs(publicIPs, pion.ICECandidateTypeHost)
+	}
+
+	// Fast ICE timeouts — don't wait long for STUN if it's unreachable
+	s.SetICETimeouts(3*time.Second, 15*time.Second, 1*time.Second)
+
+	// Include loopback for local testing
 	s.SetIncludeLoopbackCandidate(true)
-	s.SetICETimeouts(5*time.Second, 25*time.Second, 2*time.Second)
 
 	// Media engine with default codecs
 	m := &pion.MediaEngine{}
