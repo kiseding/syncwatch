@@ -390,7 +390,27 @@ async function loadMedia(path) {
   try {
     $('#video-status').classList.remove('hidden');
     $('#status-text').textContent = '加载中...';
-    await api.play(path);
+    const result = await api.play(path);
+
+    // If async loading, poll until playing
+    if (result.status === 'loading') {
+      $('#status-text').textContent = '正在初始化流媒体...';
+      for (let i = 0; i < 30; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        try {
+          const s = await api.state();
+          if (s.state === 'playing') {
+            $('#status-text').textContent = '';
+            $('#video-status').classList.add('hidden');
+            updatePlayerUI();
+            return;
+          }
+        } catch(e) {}
+      }
+      $('#status-text').textContent = '启动超时，请刷新重试';
+      return;
+    }
+
     $('#status-text').textContent = '';
     $('#video-status').classList.add('hidden');
   } catch (err) {

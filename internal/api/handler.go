@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -40,14 +42,17 @@ func (h *Handler) Play(w http.ResponseWriter, r *http.Request) {
 		inputType = "url"
 	}
 
-	if err := h.Room.Play(r.Context(), req.Path, inputType); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	// Start playback asynchronously so the HTTP request doesn't time out
+	// on slow-to-initialize streams (e.g., m3u8)
+	go func() {
+		if err := h.Room.Play(context.Background(), req.Path, inputType); err != nil {
+			fmt.Printf("[play] error: %v\n", err)
+		}
+	}()
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status": "playing",
-		"media":  h.Room.GetMediaInfo(),
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
+		"status": "loading",
+		"path":   req.Path,
 	})
 }
 
