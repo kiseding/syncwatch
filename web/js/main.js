@@ -14,8 +14,6 @@ function dbg(key, val) {
   el.innerHTML = el.innerHTML.replace(new RegExp(key + ': .*', 'g'), key + ': ' + val);
   console.log('[dbg]', key, val);
 }
-let reconnectAttempts = 0, reconnectTimer = null;
-const MAX_RECONNECT = 20;
 
 // ====== Navigation ======
 window.navigate = function (screen) {
@@ -83,20 +81,13 @@ function connectWebSocket() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
 
-  ws.onopen = () => { reconnectAttempts = 0; dbg('WS', 'open'); };
+  ws.onopen = () => { reconnectAttempts = 0; dbg('WS', 'open'); store.set('connection.status', 'connected'); updateConnectionUI(); };
   ws.onmessage = (e) => handleWSMessage(JSON.parse(e.data));
-  ws.onclose = (ev) => { dbg('WS', 'close code='+ev.code); store.set('connection.status', 'disconnected'); updateConnectionUI(); scheduleReconnect(); };
-  ws.onerror = (ev) => { dbg('Error', 'ws error'); };
+  ws.onclose = (ev) => { dbg('WS', 'close '+ev.code); store.set('connection.status', 'disconnected'); updateConnectionUI(); setTimeout(connectWebSocket, 500); };
+  ws.onerror = () => { dbg('WS', 'error'); };
 }
 
-function scheduleReconnect() {
-  clearTimeout(reconnectTimer);
-  if (reconnectAttempts >= MAX_RECONNECT) return;
-  const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 30000);
-  reconnectAttempts++;
-  showReconnect(true);
-  reconnectTimer = setTimeout(connectWebSocket, delay);
-}
+// Reconnect is now handled inline in ws.onclose with a simple 500ms retry
 
 function handleWSMessage(msg) {
   switch (msg.type) {
@@ -121,7 +112,7 @@ async function handleOffer(sdp) {
       dbg('Track', event.track.kind);
       if (event.track.kind === 'video') {
         $('#main-video').srcObject = event.streams[0];
-        hideVideoStatus(); showReconnect(false);
+        hideVideoStatus();
       }
     };
 
@@ -136,11 +127,6 @@ async function handleOffer(sdp) {
       dbg('ICE', pc.iceConnectionState);
       store.set('connection.iceState', pc.iceConnectionState);
       updateConnectionUI();
-      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
-        showReconnect(true);
-      } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-        showReconnect(false);
-      }
     };
 
     pc.ondatachannel = (event) => {
@@ -183,7 +169,6 @@ function handleJoined(rs) {
     sel.classList.toggle('hidden', rs.audio_tracks.length <= 1);
     sel.value = rs.selected_audio || 0;
   }
-  showReconnect(false);
   updatePlayerUI();
 }
 
@@ -313,12 +298,6 @@ function updatePlayerUI() {
     : '<svg width="24" height="24" viewBox="0 0 24 24"><polygon points="8,5 19,12 8,19" fill="currentColor"/></svg>';
 }
 
-function showReconnect(show) {
-  const reEl = $('#reconnect-overlay');
-  if (reEl) reEl.classList.toggle('hidden', !show);
-  if (show) store.set('connection.status', 'connecting'); else store.set('connection.status', 'connected');
-  updateConnectionUI();
-}
 
 function hideVideoStatus() { $('#video-status').classList.add('hidden'); }
 
