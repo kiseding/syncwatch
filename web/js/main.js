@@ -1,17 +1,14 @@
-// SyncWatch Frontend - Main Application
+// SyncWatch Frontend
 import { store } from './store.js';
 import { api } from './api.js';
 import JASSUB from 'jassub';
 
-// ====== DOM Refs ======
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
 
-// ====== State ======
 let pc = null;
 let ws = null;
 let syncChannel = null;
-let reconnectTimer = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT = 10;
 
@@ -26,29 +23,46 @@ window.navigate = function (screen) {
   }
 };
 
-// ====== Login ======
+// ====== Login (Viewer) ======
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const password = $('#password-input').value;
+  const pwd = $('#password-input').value;
   const btn = $('#login-btn');
-  const errorEl = $('#login-error');
-
-  btn.disabled = true;
-  btn.textContent = '验证中...';
-  errorEl.classList.add('hidden');
-
+  const err = $('#login-error');
+  btn.disabled = true; btn.textContent = '验证中...'; err.classList.add('hidden');
   try {
-    const result = await api.login(password);
-    store.login(result.token, result.role);
+    const r = await api.login(pwd);
+    store.login(r.token, r.role);
     $('#password-input').value = '';
     navigate('player');
     connectWebSocket();
-  } catch (err) {
-    errorEl.textContent = err.message;
-    errorEl.classList.remove('hidden');
+  } catch (ex) {
+    err.textContent = ex.message; err.classList.remove('hidden');
   } finally {
-    btn.disabled = false;
-    btn.textContent = '进入观影室';
+    btn.disabled = false; btn.textContent = '进入观影室';
+  }
+});
+
+// ====== Admin Login ======
+$('#admin-login-form')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pwd = $('#admin-password-input').value;
+  const btn = $('#admin-login-btn');
+  const err = $('#admin-login-error');
+  btn.disabled = true; btn.textContent = '验证中...'; err.classList.add('hidden');
+  try {
+    const r = await api.adminLogin(pwd);
+    store.login(r.token, r.role);
+    $('#admin-password-input').value = '';
+    $('#admin-login-panel').classList.add('hidden');
+    $('#admin-dashboard').classList.remove('hidden');
+    showHostControls(true);
+    navigate('player');
+    connectWebSocket();
+  } catch (ex) {
+    err.textContent = ex.message; err.classList.remove('hidden');
+  } finally {
+    btn.disabled = false; btn.textContent = '进入控制台';
   }
 });
 
@@ -56,125 +70,69 @@ $('#login-form').addEventListener('submit', async (e) => {
 function connectWebSocket() {
   const token = store.get('token');
   if (!token) return;
-
   store.set('connection.status', 'connecting');
   updateConnectionUI();
 
-  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${location.host}/ws?token=${encodeURIComponent(token)}`;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
 
-  ws = new WebSocket(wsUrl);
-
-  ws.onopen = () => {
-    reconnectAttempts = 0;
-    console.log('[WS] connected');
-  };
-
-  ws.onmessage = async (event) => {
-    const msg = JSON.parse(event.data);
-    handleWSMessage(msg);
-  };
-
-  ws.onclose = () => {
-    console.log('[WS] disconnected');
-    store.set('connection.status', 'disconnected');
-    updateConnectionUI();
-    scheduleReconnect();
-  };
-
-  ws.onerror = (err) => {
-    console.error('[WS] error', err);
-  };
+  ws.onopen = () => { reconnectAttempts = 0; };
+  ws.onmessage = (e) => handleWSMessage(JSON.parse(e.data));
+  ws.onclose = () => { store.set('connection.status', 'disconnected'); updateConnectionUI(); scheduleReconnect(); };
 }
 
 function scheduleReconnect() {
   if (reconnectAttempts >= MAX_RECONNECT) return;
   const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 30000);
   reconnectAttempts++;
-  console.log(`[WS] reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
   showReconnect(true);
-
-  reconnectTimer = setTimeout(() => {
-    connectWebSocket();
-  }, delay);
+  setTimeout(connectWebSocket, delay);
 }
 
 function handleWSMessage(msg) {
   switch (msg.type) {
-    case 'offer':
-      handleOffer(msg.sdp);
-      break;
-    case 'ice-candidate':
-      handleICECandidate(msg);
-      break;
-    case 'joined':
-      handleJoined(msg.room_state);
-      break;
-    case 'state':
-      handleStateUpdate(msg.play_state);
-      break;
-    case 'sync':
-      handleStateUpdate(msg.play_state);
-      break;
-    case 'chat':
-      addChatMessage(msg.from, msg.text, false);
-      break;
-    case 'subtitle':
-      initSubtitle(msg.from, msg.text);
-      break;
-    case 'system':
-      addChatMessage(null, msg.text, true);
-      break;
-    case 'error':
-      store.set('error', msg.message);
-      break;
+    case 'offer':        handleOffer(msg.sdp); break;
+    case 'ice-candidate': handleICECandidate(msg); break;
+    case 'joined':       handleJoined(msg.room_state); break;
+    case 'state':        handleStateUpdate(msg.play_state); break;
+    case 'sync':         handleStateUpdate(msg.play_state); break;
+    case 'subtitle':     initSubtitle(msg.from, msg.text); break;
+    case 'system':       statusToast(msg.text); break;
+    case 'error':        statusToast(msg.message); break;
   }
 }
 
 // ====== WebRTC ======
 async function handleOffer(sdp) {
   try {
-    pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-    });
+    pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
 
     pc.ontrack = (event) => {
-      const video = $('#main-video');
       if (event.track.kind === 'video') {
-        video.srcObject = event.streams[0];
-        hideVideoStatus();
-        showReconnect(false);
+        $('#main-video').srcObject = event.streams[0];
+        hideVideoStatus(); showReconnect(false);
       }
     };
 
     pc.onicecandidate = (event) => {
       if (event.candidate) {
-        ws.send(JSON.stringify({
-          type: 'ice-candidate',
-          candidate: event.candidate.candidate,
-          sdp_mid: event.candidate.sdpMid,
-          sdp_mline_index: event.candidate.sdpMLineIndex,
-        }));
+        ws.send(JSON.stringify({ type: 'ice-candidate', candidate: event.candidate.candidate,
+          sdp_mid: event.candidate.sdpMid, sdp_mline_index: event.candidate.sdpMLineIndex }));
       }
     };
 
     pc.oniceconnectionstatechange = () => {
       store.set('connection.iceState', pc.iceConnectionState);
       updateConnectionUI();
-      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
-        showReconnect(true);
-      }
+      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') showReconnect(true);
     };
 
     pc.ondatachannel = (event) => {
-      const dc = event.channel;
-      if (dc.label === 'sync') {
-        syncChannel = dc;
-        dc.onmessage = (e) => {
-          const syncMsg = JSON.parse(e.data);
-          if (syncMsg.type === 'position') {
-            store.set('playback.position', syncMsg.t);
-          }
+      if (event.channel.label === 'sync') {
+        syncChannel = event.channel;
+        event.channel.onmessage = (e) => {
+          const m = JSON.parse(e.data);
+          if (m.type === 'position') store.set('playback.position', m.t);
         };
       }
     };
@@ -183,96 +141,28 @@ async function handleOffer(sdp) {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     ws.send(JSON.stringify({ type: 'answer', sdp: answer.sdp }));
-  } catch (err) {
-    console.error('[WebRTC] error:', err);
-  }
+  } catch (err) { console.error('[WebRTC]', err); }
 }
 
 async function handleICECandidate(msg) {
   try {
-    if (pc && msg.candidate) {
-      await pc.addIceCandidate({
-        candidate: msg.candidate,
-        sdpMid: msg.sdp_mid,
-        sdpMLineIndex: msg.sdp_mline_index,
-      });
-    }
-  } catch (err) {
-    console.error('[ICE] error:', err);
-  }
+    if (pc && msg.candidate) await pc.addIceCandidate({ candidate: msg.candidate, sdpMid: msg.sdp_mid, sdpMLineIndex: msg.sdp_mline_index });
+  } catch (err) {}
 }
 
-function handleJoined(roomState) {
-  if (!roomState) return;
-  store.set('playback', {
-    state: roomState.state,
-    position: roomState.position || 0,
-    duration: roomState.media?.duration || 0,
-    speed: roomState.speed || 1.0,
-  });
-
-  if (roomState.media) {
-    store.set('media.filename', roomState.media.filename);
-  }
-
-  // Initialize subtitle if provided
-  if (roomState.subtitle && roomState.subtitle.content) {
-    initSubtitle(roomState.subtitle.format, roomState.subtitle.content);
-  }
-
-  // Update audio track selector
-  if (roomState.audio_tracks) {
+function handleJoined(rs) {
+  if (!rs) return;
+  store.set('playback', { state: rs.state, position: rs.position || 0, duration: rs.media?.duration || 0, speed: rs.speed || 1.0 });
+  if (rs.media) store.set('media.filename', rs.media.filename);
+  if (rs.subtitle?.content) initSubtitle(rs.subtitle.format, rs.subtitle.content);
+  if (rs.audio_tracks) {
     const sel = $('#audio-select');
-    sel.innerHTML = roomState.audio_tracks.map((t, i) =>
-      `<option value="${i}">${t.language || t.title || 'Track ' + (i+1)}</option>`
-    ).join('');
-    sel.classList.toggle('hidden', roomState.audio_tracks.length <= 1);
-    sel.value = roomState.selected_audio || 0;
+    sel.innerHTML = rs.audio_tracks.map((t, i) => `<option value="${i}">${t.language || t.title || 'Track '+(i+1)}</option>`).join('');
+    sel.classList.toggle('hidden', rs.audio_tracks.length <= 1);
+    sel.value = rs.selected_audio || 0;
   }
-
-  showReconnect(false);
-  updatePlayerUI();
+  showReconnect(false); updatePlayerUI();
 }
-
-// ====== Subtitle ======
-let subRenderer = null;
-
-async function initSubtitle(format, content) {
-  // Clean up previous renderer
-  if (subRenderer) {
-    try { subRenderer.destroy(); } catch(e) {}
-    subRenderer = null;
-  }
-
-  if (!content) return;
-
-  try {
-    const video = $('#main-video');
-    const canvas = $('#subtitle-canvas');
-
-    // Resize canvas to match video
-    canvas.width = video.clientWidth || 1280;
-    canvas.height = video.clientHeight || 720;
-    canvas.style.display = 'block';
-
-    subRenderer = new JASSUB({
-      video,
-      canvas,
-      subContent: content,
-      workerUrl: '/jassub/jassub-worker.js',
-      modernWasmUrl: '/jassub/jassub-worker-modern.wasm',
-      prescaleFactor: 0.5,
-      blendMode: 'js',
-      asyncRender: true,
-      targetFps: 30,
-    });
-
-    console.log('[Sub] renderer initialized, format:', format);
-  } catch (err) {
-    console.error('[Sub] init failed:', err);
-  }
-}
-// =======
 
 function handleStateUpdate(ps) {
   if (!ps) return;
@@ -282,108 +172,95 @@ function handleStateUpdate(ps) {
   updatePlayerUI();
 }
 
-// ====== Chat ======
-function addChatMessage(from, text, isSystem) {
-  const messages = store.get('chat.messages');
-  messages.push({ from, text, system: isSystem, time: Date.now() });
-  if (messages.length > 200) messages.shift();
-  store.set('chat.messages', messages);
-  renderChatMessages();
-}
+// ====== Subtitle ======
+let subRenderer = null;
 
-function renderChatMessages() {
-  const container = $('#chat-messages');
-  const messages = store.get('chat.messages');
-  container.innerHTML = messages.slice(-50).map(m => {
-    if (m.system) {
-      return `<div class="chat-msg system">${escapeHtml(m.text)}</div>`;
-    }
-    return `<div class="chat-msg"><span class="sender">${escapeHtml(m.from)}</span>${escapeHtml(m.text)}</div>`;
-  }).join('');
-  container.scrollTop = container.scrollHeight;
+async function initSubtitle(format, content) {
+  if (subRenderer) { try { subRenderer.destroy(); } catch(e) {} subRenderer = null; }
+  if (!content) return;
+  try {
+    const video = $('#main-video');
+    const canvas = $('#subtitle-canvas');
+    canvas.width = video.clientWidth || 1280;
+    canvas.height = video.clientHeight || 720;
+    canvas.style.display = 'block';
+    subRenderer = new JASSUB({
+      video, canvas, subContent: content,
+      workerUrl: '/jassub/jassub-worker.js',
+      modernWasmUrl: '/jassub/jassub-worker-modern.wasm',
+      prescaleFactor: 0.5, blendMode: 'js', asyncRender: true, targetFps: 30,
+    });
+  } catch (err) { console.error('[Sub]', err); }
 }
-
-$('#chat-form').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const input = $('#chat-input');
-  const text = input.value.trim();
-  if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: 'chat', text }));
-  addChatMessage('我', text, false);
-  input.value = '';
-});
 
 // ====== Host Controls ======
-function showHostControls(show) {
-  $('#host-controls').classList.toggle('hidden', !show);
-}
-
-// Show controls for host role (based on login, not auto-detect)
-store.on('role', (role) => {
-  showHostControls(role === 'host');
-});
-
-// Initial check from stored role
+function showHostControls(show) { $('#host-controls').classList.toggle('hidden', !show); }
+store.on('role', (r) => showHostControls(r === 'host'));
 if (store.get('role') === 'host') showHostControls(true);
 
-// Play/Pause
 $('#btn-play-pause').addEventListener('click', async () => {
-  const state = store.get('playback.state');
-  try {
-    if (state === 'playing') {
-      await api.pause();
-    } else {
-      await api.resume();
-    }
-  } catch (err) {
-    console.error(err);
-  }
+  const s = store.get('playback.state');
+  try { s === 'playing' ? await api.pause() : await api.resume(); } catch(e) {}
 });
 
-// Seek
 $('#seek-bar').addEventListener('input', async (e) => {
-  const duration = store.get('playback.duration');
-  if (!duration) return;
-  const position = (e.target.value / 100) * duration;
-  try {
-    await api.seek(position);
-  } catch (err) {
-    console.error(err);
-  }
+  const d = store.get('playback.duration');
+  if (!d) return;
+  try { await api.seek((e.target.value / 100) * d); } catch(e) {}
 });
 
-// Speed
 $('#speed-select').addEventListener('change', async (e) => {
-  try {
-    await api.speed(parseFloat(e.target.value));
-  } catch (err) {
-    console.error(err);
-  }
+  try { await api.speed(parseFloat(e.target.value)); } catch(e) {}
 });
 
-// Audio track
 $('#audio-select').addEventListener('change', async (e) => {
+  try { await api.audioTrack(parseInt(e.target.value)); } catch(e) {}
+});
+
+// Force sync — re-fetch playback state from server
+$('#btn-force-sync').addEventListener('click', async () => {
   try {
-    await api.audioTrack(parseInt(e.target.value));
-  } catch (err) {
-    console.error(err);
+    const s = await api.state();
+    store.set('playback.state', s.state === 'playing' ? 'playing' : 'paused');
+    store.set('playback.position', s.position || 0);
+    store.set('playback.speed', s.speed || 1.0);
+    updatePlayerUI();
+    statusToast('已同步');
+  } catch(e) { statusToast('同步失败'); }
+});
+
+// Web fullscreen — fill the browser viewport
+$('#btn-web-fullscreen').addEventListener('click', () => {
+  document.getElementById('player-screen').classList.toggle('web-fullscreen');
+});
+
+// True fullscreen — use Fullscreen API
+$('#btn-fullscreen').addEventListener('click', () => {
+  const el = $('#video-container');
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
   }
 });
 
-// File picker
-$('#btn-open-file').addEventListener('click', () => {
-  // For host, show a file path input (browser can't browse filesystem directly)
-  const path = prompt('输入媒体文件路径（服务器本地路径）:');
-  if (path) {
-    loadMedia(path);
+document.addEventListener('fullscreenchange', () => {
+  if (document.fullscreenElement) {
+    $('#main-video').style.objectFit = 'contain';
+  } else {
+    $('#main-video').style.objectFit = '';
   }
+});
+
+// File/URL loading
+$('#btn-open-file').addEventListener('click', () => {
+  const path = prompt('输入媒体文件路径（服务器本地路径）:');
+  if (path) loadMedia(path);
 });
 
 $('#btn-load-url').addEventListener('click', () => {
   const url = $('#url-input').value.trim();
-  if (url) {
-    loadMedia(url);
-  }
+  if (url) loadMedia(url);
 });
 
 async function loadMedia(path) {
@@ -391,16 +268,13 @@ async function loadMedia(path) {
     $('#video-status').classList.remove('hidden');
     $('#status-text').textContent = '加载中...';
     const result = await api.play(path);
-
-    // If async loading, poll until playing
     if (result.status === 'loading') {
       $('#status-text').textContent = '正在初始化流媒体...';
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < 60; i++) {
         await new Promise(r => setTimeout(r, 1000));
         try {
           const s = await api.state();
           if (s.state === 'playing') {
-            $('#status-text').textContent = '';
             $('#video-status').classList.add('hidden');
             updatePlayerUI();
             return;
@@ -410,182 +284,92 @@ async function loadMedia(path) {
       $('#status-text').textContent = '启动超时，请刷新重试';
       return;
     }
-
-    $('#status-text').textContent = '';
     $('#video-status').classList.add('hidden');
   } catch (err) {
     $('#status-text').textContent = `错误: ${err.message}`;
-    console.error(err);
   }
 }
 
-// ====== UI Updates ======
+// ====== UI ======
 function updateConnectionUI() {
-  const status = store.get('connection.status');
-  const dot = $('#connection-status');
-  dot.className = 'status-dot ' + status;
+  $('#connection-status').className = 'status-dot ' + store.get('connection.status');
 }
 
 function updatePlayerUI() {
-  const playback = store.get('playback');
-  const duration = playback.duration || 0;
-
-  // Seek bar
-  const seekBar = $('#seek-bar');
-  if (duration > 0) {
-    seekBar.max = 100;
-    seekBar.value = (playback.position / duration) * 100;
-  }
-
-  // Time display
-  $('#time-display').textContent =
-    `${formatTime(playback.position)} / ${formatTime(duration)}`;
-
-  // Play/Pause icon
+  const p = store.get('playback');
+  const d = p.duration || 0;
+  const bar = $('#seek-bar');
+  if (d > 0) { bar.max = 100; bar.value = (p.position / d) * 100; }
+  $('#time-display').textContent = `${formatTime(p.position)} / ${formatTime(d)}`;
   const btn = $('#btn-play-pause');
-  if (playback.state === 'playing') {
-    btn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" fill="currentColor"/><rect x="14" y="4" width="4" height="16" fill="currentColor"/></svg>';
-  } else {
-    btn.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24"><polygon points="8,5 19,12 8,19" fill="currentColor"/></svg>';
-  }
+  btn.innerHTML = p.state === 'playing'
+    ? '<svg width="24" height="24" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" fill="currentColor"/><rect x="14" y="4" width="4" height="16" fill="currentColor"/></svg>'
+    : '<svg width="24" height="24" viewBox="0 0 24 24"><polygon points="8,5 19,12 8,19" fill="currentColor"/></svg>';
 }
 
 function showReconnect(show) {
   $('#reconnect-overlay').classList.toggle('hidden', !show);
-  if (show) {
-    store.set('connection.status', 'connecting');
-    updateConnectionUI();
-  } else {
-    store.set('connection.status', 'connected');
-    updateConnectionUI();
-  }
+  store.set('connection.status', show ? 'connecting' : 'connected');
+  updateConnectionUI();
 }
 
-function hideVideoStatus() {
-  $('#video-status').classList.add('hidden');
-  $('#status-text').textContent = '';
+function hideVideoStatus() { $('#video-status').classList.add('hidden'); }
+
+// Brief status toast
+function statusToast(text) {
+  const el = document.getElementById('viewer-count');
+  if (el) { el.textContent = text; setTimeout(() => { el.textContent = `${store.get('viewers')} 人在线`; }, 3000); }
 }
 
 // ====== Admin ======
 async function updateAdmin() {
   try {
-    const stats = await api.status();
-    $('#admin-viewers').textContent = stats.viewers || 0;
-    $('#admin-state').textContent = stats.state || '空闲';
-    $('#admin-media').textContent = stats.media?.filename || '无';
-    $('#admin-transcode').textContent = stats.state || '空闲';
-  } catch (err) {
-    console.error(err);
-  }
+    const s = await api.status();
+    $('#admin-viewers').textContent = s.viewers || 0;
+    $('#admin-state').textContent = s.state || '空闲';
+    $('#admin-media').textContent = s.media?.filename || '无';
+    $('#admin-transcode').textContent = s.state || '空闲';
+  } catch(e) {}
 }
 
 // ====== Utilities ======
-function formatTime(seconds) {
-  if (!seconds || isNaN(seconds)) return '00:00';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0) return `${pad(h)}:${pad(m)}:${pad(s)}`;
-  return `${pad(m)}:${pad(s)}`;
+function formatTime(s) {
+  if (!s || isNaN(s)) return '00:00';
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
 }
-
 function pad(n) { return String(n).padStart(2, '0'); }
-
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
 
 // ====== Keyboard ======
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
-  const role = store.get('role');
-  if (role !== 'host') return;
-
+  if (store.get('role') !== 'host') return;
   switch (e.code) {
-    case 'Space':
-      e.preventDefault();
-      $('#btn-play-pause').click();
-      break;
-    case 'ArrowLeft':
-      e.preventDefault();
-      seekRelative(-10);
-      break;
-    case 'ArrowRight':
-      e.preventDefault();
-      seekRelative(10);
-      break;
-    case 'KeyC':
-      if (e.ctrlKey || e.metaKey) return;
-      const chatInput = $('#chat-input');
-      chatInput.focus();
-      break;
+    case 'Space': e.preventDefault(); $('#btn-play-pause').click(); break;
+    case 'ArrowLeft': e.preventDefault(); seekRelative(-10); break;
+    case 'ArrowRight': e.preventDefault(); seekRelative(10); break;
+    case 'KeyF': if (!e.ctrlKey && !e.metaKey) { $('#btn-fullscreen').click(); } break;
   }
 });
 
-async function seekRelative(delta) {
-  const pos = store.get('playback.position');
-  try {
-    await api.seek(Math.max(0, pos + delta));
-  } catch (err) {
-    console.error(err);
-  }
+async function seekRelative(d) {
+  try { await api.seek(Math.max(0, store.get('playback.position') + d)); } catch(e) {}
 }
 
-// ====== Admin Login ======
-$('#admin-login-form')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const password = $('#admin-password-input').value;
-  const btn = $('#admin-login-btn');
-  const errorEl = $('#admin-login-error');
-
-  btn.disabled = true;
-  btn.textContent = '验证中...';
-  errorEl.classList.add('hidden');
-
-  try {
-    const result = await api.adminLogin(password);
-    store.login(result.token, result.role);
-    $('#admin-password-input').value = '';
-    $('#admin-login-panel').classList.add('hidden');
-    $('#admin-dashboard').classList.remove('hidden');
-    showHostControls(true);
-    navigate('player');
-    connectWebSocket();
-  } catch (err) {
-    errorEl.textContent = err.message;
-    errorEl.classList.remove('hidden');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '进入控制台';
-  }
-});
-
-// ====== Initialization ======
+// ====== Init ======
 (function init() {
-  const token = store.get('token');
-  const role = store.get('role');
-  const path = window.location.pathname;
-
+  const token = store.get('token'), role = store.get('role'), path = window.location.pathname;
   if (token && role === 'host') {
     showHostControls(true);
     $('#admin-login-panel')?.classList.add('hidden');
     $('#admin-dashboard')?.classList.remove('hidden');
-    navigate('player');
-    connectWebSocket();
+    navigate('player'); connectWebSocket();
   } else if (token && role === 'viewer') {
-    navigate('player');
-    connectWebSocket();
+    navigate('player'); connectWebSocket();
   } else if (path === '/admin') {
     navigate('admin');
   } else {
     navigate('login');
   }
-
-  // Periodic status updates
-  setInterval(() => {
-    if (store.get('screen') === 'admin') updateAdmin();
-  }, 3000);
+  setInterval(() => { if (store.get('screen') === 'admin') updateAdmin(); }, 3000);
 })();

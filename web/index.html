@@ -33,7 +33,6 @@
 
     <!-- Player Screen -->
     <div id="player-screen" class="screen">
-      <!-- Video Area -->
       <div id="video-container">
         <video id="main-video" autoplay playsinline muted></video>
         <canvas id="subtitle-canvas"></canvas>
@@ -64,6 +63,9 @@
           </select>
           <select id="audio-select" title="音轨" class="hidden"></select>
           <select id="subtitle-select" title="字幕" class="hidden"></select>
+          <button id="btn-force-sync" title="强制同步">🔄</button>
+          <button id="btn-web-fullscreen" title="网页全屏">⛶</button>
+          <button id="btn-fullscreen" title="真全屏">⛶</button>
         </div>
         <div class="host-tools">
           <button id="btn-open-file">选择影片</button>
@@ -72,25 +74,15 @@
         </div>
       </div>
 
-      <!-- Chat + Status Bar -->
-      <div id="bottom-panel">
-        <div id="chat-panel">
-          <div id="chat-messages"></div>
-          <form id="chat-form">
-            <input type="text" id="chat-input" placeholder="发送消息..." autocomplete="off">
-            <button type="submit">发送</button>
-          </form>
-        </div>
-        <div id="status-bar">
-          <span id="viewer-count">0 人在线</span>
-          <span id="connection-status" class="status-dot disconnected"></span>
-        </div>
+      <!-- Status Bar -->
+      <div id="status-bar">
+        <span id="viewer-count">0 人在线</span>
+        <span id="connection-status" class="status-dot disconnected"></span>
       </div>
     </div>
 
     <!-- Admin Screen -->
     <div id="admin-screen" class="screen">
-      <!-- Admin Login -->
       <div id="admin-login-panel" class="login-container">
         <div class="logo">
           <h1>SyncWatch</h1>
@@ -102,7 +94,6 @@
         </form>
         <p id="admin-login-error" class="error-text hidden"></p>
       </div>
-      <!-- Admin Dashboard (shown after login) -->
       <div id="admin-dashboard" class="admin-container hidden">
         <h2>管理后台</h2>
         <div class="admin-stats">
