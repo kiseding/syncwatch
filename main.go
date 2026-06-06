@@ -107,7 +107,7 @@ func main() {
 	mux.Handle("GET /api/state", apiRouter.AuthRequired(handler.SignalingState))
 
 	// WebSocket signaling
-	setupWebSocket(mux, tokenManager, sfu, hub, room, &logger)
+	setupWebSocket(mux, tokenManager, sfu, hub, room, &logger, iceServers)
 
 	// Serve frontend
 	serveFrontend(mux, &logger)
@@ -157,7 +157,7 @@ func buildICEServers(cfg *config.Config) []pion.ICEServer {
 
 // setupWebSocket configures the WebSocket signaling endpoint.
 func setupWebSocket(mux *http.ServeMux, tm *auth.TokenManager, sfu *webrtc.SFU,
-	hub *signaling.Hub, r *room.Room, logger *zerolog.Logger) {
+	hub *signaling.Hub, r *room.Room, logger *zerolog.Logger, iceServers []pion.ICEServer) {
 
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool { return true },
@@ -293,8 +293,9 @@ func setupWebSocket(mux *http.ServeMux, tm *auth.TokenManager, sfu *webrtc.SFU,
 
 		// Pass ICE servers to frontend for PeerConnection config
 		for _, srv := range iceServers {
+			cred, _ := srv.Credential.(string)
 			roomState.IceServers = append(roomState.IceServers, signaling.ICEServerConfig{
-				URLs: srv.URLs, Username: srv.Username, Credential: srv.Credential,
+				URLs: srv.URLs, Username: srv.Username, Credential: cred,
 			})
 		}
 
