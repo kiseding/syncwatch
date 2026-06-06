@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+  <meta name="theme-color" content="#1a1a2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.json">
+  <title>SyncWatch</title>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Login Screen -->
+    <div id="login-screen" class="screen active">
+      <div class="login-container">
+        <div class="logo">
+          <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
+            <circle cx="32" cy="32" r="30" stroke="#6c63ff" stroke-width="3"/>
+            <polygon points="24,18 48,32 24,46" fill="#6c63ff"/>
+          </svg>
+          <h1>SyncWatch</h1>
+          <p>私人异地同步观影</p>
+        </div>
+        <form id="login-form" class="login-form">
+          <input type="password" id="password-input" placeholder="输入密码" required autocomplete="current-password">
+          <button type="submit" id="login-btn">进入观影室</button>
+        </form>
+        <p id="login-error" class="error-text hidden"></p>
+      </div>
+    </div>
+
+    <!-- Player Screen -->
+    <div id="player-screen" class="screen">
+      <!-- Video Area -->
+      <div id="video-container">
+        <video id="main-video" autoplay playsinline muted></video>
+        <canvas id="subtitle-canvas"></canvas>
+        <div id="video-status" class="video-overlay hidden">
+          <div class="spinner"></div>
+          <p id="status-text">加载中...</p>
+        </div>
+        <div id="reconnect-overlay" class="video-overlay hidden">
+          <p>重连中...</p>
+          <div class="spinner"></div>
+        </div>
+      </div>
+
+      <!-- Host Controls -->
+      <div id="host-controls" class="hidden">
+        <div class="controls-bar">
+          <button id="btn-play-pause" title="播放/暂停">
+            <svg width="24" height="24" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" fill="currentColor"/><rect x="14" y="4" width="4" height="16" fill="currentColor"/></svg>
+          </button>
+          <input type="range" id="seek-bar" min="0" max="100" value="0" step="0.1">
+          <span id="time-display">00:00 / 00:00</span>
+          <select id="speed-select" title="倍速">
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="1.25">1.25x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2x</option>
+          </select>
+          <select id="audio-select" title="音轨" class="hidden"></select>
+          <select id="subtitle-select" title="字幕" class="hidden"></select>
+        </div>
+        <div class="host-tools">
+          <button id="btn-open-file">选择影片</button>
+          <input type="text" id="url-input" placeholder="或输入视频URL...">
+          <button id="btn-load-url">加载</button>
+        </div>
+      </div>
+
+      <!-- Chat + Status Bar -->
+      <div id="bottom-panel">
+        <div id="chat-panel">
+          <div id="chat-messages"></div>
+          <form id="chat-form">
+            <input type="text" id="chat-input" placeholder="发送消息..." autocomplete="off">
+            <button type="submit">发送</button>
+          </form>
+        </div>
+        <div id="status-bar">
+          <span id="viewer-count">0 人在线</span>
+          <span id="connection-status" class="status-dot disconnected"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin Screen -->
+    <div id="admin-screen" class="screen">
+      <!-- Admin Login -->
+      <div id="admin-login-panel" class="login-container">
+        <div class="logo">
+          <h1>SyncWatch</h1>
+          <p>Host 管理控制台</p>
+        </div>
+        <form id="admin-login-form" class="login-form">
+          <input type="password" id="admin-password-input" placeholder="输入管理员密码" required autocomplete="current-password">
+          <button type="submit" id="admin-login-btn">进入控制台</button>
+        </form>
+        <p id="admin-login-error" class="error-text hidden"></p>
+      </div>
+      <!-- Admin Dashboard (shown after login) -->
+      <div id="admin-dashboard" class="admin-container hidden">
+        <h2>管理后台</h2>
+        <div class="admin-stats">
+          <div class="stat-card">
+            <span class="stat-label">在线人数</span>
+            <span class="stat-value" id="admin-viewers">0</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">播放状态</span>
+            <span class="stat-value" id="admin-state">空闲</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">当前影片</span>
+            <span class="stat-value" id="admin-media">无</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">转码状态</span>
+            <span class="stat-value" id="admin-transcode">空闲</span>
+          </div>
+        </div>
+        <button onclick="navigate('player')">返回播放器</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+# SyncWatch Configuration
+# Copy this file to config.yaml and modify as needed.
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+  public_url: ""           # Public URL for PWA manifest
+  tls: false
+  cert_file: ""
+  key_file: ""
+
+webrtc:
+  ice_lite: true
+  udp_port_start: 60000
+  udp_port_end: 60100
+  stun_servers:
+    - "stun:stun.l.google.com:19302"
+  turn_servers: []          # Optional TURN servers
+  ipv6_first: true
+  public_ips: []
+
+media:
+  ffmpeg_path: "/usr/bin/ffmpeg"
+  ffprobe_path: "/usr/bin/ffprobe"
+  scan_dirs:                # Directories to scan for media files
+    - "/home/yys/media"
+  allowed_extensions:
+    - ".mp4"
+    - ".mkv"
+    - ".avi"
+    - ".mov"
+    - ".webm"
+  hardware_acceleration: false
+
+transcode:
+  video_codec: "libvpx"
+  audio_codec: "libopus"
+  video_bitrate: "2000k"
+  audio_bitrate: "128k"
+  max_resolution: "1920x1080"
+  fps: 30
+  preset: "veryfast"
+
+auth:
+  password_hash: ""         # Viewer password (Argon2 hash), empty = auto-generate
+  admin_password_hash: ""   # Admin password (Argon2 hash), empty = same as viewer
+  rate_limit_per_min: 5
+  session_timeout: 86400    # 24 hours
+  jwt_secret: ""            # Auto-generated if empty
