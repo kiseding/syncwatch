@@ -1,4 +1,4 @@
-const CACHE = 'syncwatch-v1';
+const CACHE = 'syncwatch-v2';
 const ASSETS = [
   '/',
   '/index.html',
