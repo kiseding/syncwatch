@@ -234,6 +234,58 @@ func setupWebSocket(mux *http.ServeMux, tm *auth.TokenManager, sfu *webrtc.SFU,
 			}
 		}
 
+		// Send room state + ICE servers FIRST (frontend needs ICE config before creating PC)
+		roomState := &signaling.RoomState{
+			State:    r.State().String(),
+			Position: r.GetPosition(),
+			Speed:    r.GetSpeed(),
+		}
+		if info := r.GetMediaInfo(); info != nil {
+			roomState.Media = &signaling.MediaState{
+				Filename: info.Path,
+				Duration: info.Duration,
+			}
+		}
+		if subFmt, subContent, subIdx := r.GetSubtitleData(); subIdx >= 0 {
+			roomState.Subtitle = &signaling.SubtitleData{
+				Format:  subFmt,
+				Content: subContent,
+				Index:   subIdx,
+			}
+		}
+		var audioTracks []signaling.TrackInfo
+		for _, t := range r.GetAudioTracks() {
+			audioTracks = append(audioTracks, signaling.TrackInfo{
+				Index: t.Index, Type: "audio",
+				Language: t.Language, Title: t.Title,
+			})
+		}
+		roomState.AudioTracks = audioTracks
+		roomState.SelectedAudio = r.GetAudioIndex()
+		roomState.SelectedSub = r.GetSubIndex()
+
+		var subTracks []signaling.TrackInfo
+		for _, s := range r.GetSubtitles() {
+			name := filepath.Base(s.Path)
+			subTracks = append(subTracks, signaling.TrackInfo{
+				Index: s.Index, Type: "subtitle",
+				Language: s.Language, Title: name + " (" + s.Format + ")",
+			})
+		}
+		roomState.SubTracks = subTracks
+
+		for _, srv := range iceServers {
+			cred, _ := srv.Credential.(string)
+			roomState.IceServers = append(roomState.IceServers, signaling.ICEServerConfig{
+				URLs: srv.URLs, Username: srv.Username, Credential: cred,
+			})
+		}
+
+		hub.SendTo(viewerID, signaling.Message{
+			Type:      signaling.MsgJoined,
+			RoomState: roomState,
+		})
+
 		// Create and send SDP offer
 		offer, err := session.PeerConn.CreateOffer(nil)
 		if err != nil {
@@ -246,62 +298,6 @@ func setupWebSocket(mux *http.ServeMux, tm *auth.TokenManager, sfu *webrtc.SFU,
 		hub.SendTo(viewerID, signaling.Message{
 			Type: signaling.MsgOffer,
 			SDP:  offer.SDP,
-		})
-
-		// Send current room state
-		roomState := &signaling.RoomState{
-			State:    r.State().String(),
-			Position: r.GetPosition(),
-			Speed:    r.GetSpeed(),
-		}
-		if info := r.GetMediaInfo(); info != nil {
-			roomState.Media = &signaling.MediaState{
-				Filename: info.Path,
-				Duration: info.Duration,
-			}
-		}
-		// Attach subtitle data if available
-		if subFmt, subContent, subIdx := r.GetSubtitleData(); subIdx >= 0 {
-			roomState.Subtitle = &signaling.SubtitleData{
-				Format:  subFmt,
-				Content: subContent,
-				Index:   subIdx,
-			}
-		}
-		// Audio tracks
-		var audioTracks []signaling.TrackInfo
-		for _, t := range r.GetAudioTracks() {
-			audioTracks = append(audioTracks, signaling.TrackInfo{
-				Index: t.Index, Type: "audio",
-				Language: t.Language, Title: t.Title,
-			})
-		}
-		roomState.AudioTracks = audioTracks
-		roomState.SelectedAudio = r.GetAudioIndex()
-		roomState.SelectedSub = r.GetSubIndex()
-
-		// Subtitle tracks
-		var subTracks []signaling.TrackInfo
-		for _, s := range r.GetSubtitles() {
-			name := filepath.Base(s.Path)
-			subTracks = append(subTracks, signaling.TrackInfo{
-				Index: s.Index, Type: "subtitle",
-				Language: s.Language, Title: name + " (" + s.Format + ")",
-			})
-		}
-		roomState.SubTracks = subTracks
-
-		// Pass ICE servers to frontend for PeerConnection config
-		for _, srv := range iceServers {
-			cred, _ := srv.Credential.(string)
-			roomState.IceServers = append(roomState.IceServers, signaling.ICEServerConfig{
-				URLs: srv.URLs, Username: srv.Username, Credential: cred,
-			})
-		}
-
-		hub.SendTo(viewerID, signaling.Message{
-			Type:      signaling.MsgJoined,
-			RoomState: roomState,
 		})
 
 		hub.SendSystem(fmt.Sprintf("%s 加入了房间", viewerID))
