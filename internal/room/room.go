@@ -145,13 +145,13 @@ func (r *Room) State() State {
 }
 
 // Play loads and starts playing a media file or URL.
+// The lock is only held during fast state mutations; slow I/O (ffprobe, ffmpeg start)
+// runs outside the lock so frontend state polling doesn't block.
 func (r *Room) Play(ctx context.Context, filePath, inputType string) error {
+	// Phase 1: Stop old pipeline (under lock)
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	r.inputType = inputType
 
-	// Stop any existing pipeline
 	if r.pipeline != nil {
 		r.pipeline.Stop()
 	}
@@ -161,22 +161,26 @@ func (r *Room) Play(ctx context.Context, filePath, inputType string) error {
 	if r.audioRTP != nil {
 		r.audioRTP.Stop()
 	}
+	r.pipeline = nil
+	r.videoRTP = nil
+	r.audioRTP = nil
+	r.videoRelay = nil
+	r.audioRelay = nil
 
 	r.state.Store(int32(StateLoading))
+	r.mu.Unlock()
 
-	// Probe media
+	// Phase 2: Probe media (no lock — slow network I/O)
 	info, err := media.Probe(r.ffprobePath, filePath)
 	if err != nil {
 		r.state.Store(int32(StateError))
 		return fmt.Errorf("probe media: %w", err)
 	}
-	r.mediaInfo = info
 
-	// Find video and audio tracks
+	// Analyze tracks (no lock needed — local computation)
 	videoIdx := -1
 	audioIdx := -1
-	r.audioTracks = nil
-
+	var audioTracks []media.TrackInfo
 	for _, t := range info.Tracks {
 		if t.Type == "video" && videoIdx < 0 {
 			videoIdx = t.Index
@@ -185,54 +189,43 @@ func (r *Room) Play(ctx context.Context, filePath, inputType string) error {
 			if audioIdx < 0 {
 				audioIdx = t.Index
 			}
-			r.audioTracks = append(r.audioTracks, t)
+			audioTracks = append(audioTracks, t)
 		}
 	}
-
 	if videoIdx < 0 {
 		r.state.Store(int32(StateError))
 		return fmt.Errorf("no video track found")
 	}
 	if audioIdx < 0 {
-		audioIdx = 0 // Will produce silent audio
+		audioIdx = 0
 	}
 
-	// Find external subtitle files
-	r.subs, _ = media.ExtractSubtitles(r.ffmpegPath, filePath)
-
-	// Load first subtitle by default (if any)
-	r.subFormat = ""
-	r.subContent = ""
-	r.subIndex = -1
-	if len(r.subs) > 0 {
-		format, content, err := media.ReadSubtitleFile(r.subs[0].Path)
-		if err == nil {
-			r.subFormat = format
-			r.subContent = content
-			r.subIndex = 0
+	// External subtitles (no lock — filesystem I/O)
+	subs, _ := media.ExtractSubtitles(r.ffmpegPath, filePath)
+	var subFormat, subContent string
+	subIndex := -1
+	if len(subs) > 0 {
+		if fmt, cnt, err := media.ReadSubtitleFile(subs[0].Path); err == nil {
+			subFormat, subContent, subIndex = fmt, cnt, 0
 		}
 	}
 
-	// Create RTP readers
-	r.videoRTP, err = stream.NewReader(r.videoPort, 200)
+	// RTP readers (no lock — UDP bind only)
+	videoRTP, err := stream.NewReader(r.videoPort, 200)
 	if err != nil {
 		r.state.Store(int32(StateError))
 		return fmt.Errorf("create video RTP reader: %w", err)
 	}
-
-	r.audioRTP, err = stream.NewReader(r.audioPort, 200)
+	audioRTP, err := stream.NewReader(r.audioPort, 200)
 	if err != nil {
-		r.videoRTP.Stop()
+		videoRTP.Stop()
 		r.state.Store(int32(StateError))
 		return fmt.Errorf("create audio RTP reader: %w", err)
 	}
 
-	// Create relays
-	r.videoRelay = stream.NewVideoRelay(r.videoRTP)
-	r.audioRelay = stream.NewVideoRelay(r.audioRTP)
-
-	// Start FFmpeg pipeline
-	r.pipeline = media.NewPipeline(media.PipelineConfig{
+	// Build pipeline config (read-only config fields, no lock needed)
+	r.mu.RLock()
+	cfg := media.PipelineConfig{
 		InputPath:    filePath,
 		InputType:    inputType,
 		SeekPosition: 0,
@@ -247,46 +240,64 @@ func (r *Room) Play(ctx context.Context, filePath, inputType string) error {
 		AudioBitrate: r.audioBitrate,
 		FPS:          r.fps,
 		FFmpegPath:   r.ffmpegPath,
-	})
+	}
+	r.mu.RUnlock()
 
-	r.pipeline.OnStatusChange = func(s media.Status) {
+	pipeline := media.NewPipeline(cfg)
+	pipeline.OnStatusChange = func(s media.Status) {
 		if s == media.StatusError {
 			r.state.Store(int32(StateError))
 		}
 	}
-	r.pipeline.OnError = func(err error) {
+	pipeline.OnError = func(err error) {
 		r.state.Store(int32(StateError))
 		fmt.Printf("[room] pipeline error: %v\n", err)
 	}
 
-	if err := r.pipeline.Start(context.Background()); err != nil {
+	// Phase 3: Start pipeline (may be slow for remote URLs, no lock)
+	if err := pipeline.Start(context.Background()); err != nil {
+		videoRTP.Stop()
+		audioRTP.Stop()
 		r.state.Store(int32(StateError))
 		return fmt.Errorf("start pipeline: %w", err)
 	}
-
-	// Check pipeline didn't crash immediately after start
-	if r.pipeline.Status() != media.StatusRunning {
+	if pipeline.Status() != media.StatusRunning {
+		videoRTP.Stop()
+		audioRTP.Stop()
 		r.state.Store(int32(StateError))
 		return fmt.Errorf("pipeline failed to start")
 	}
 
-	// Start RTP readers (begin buffering)
-	r.videoRTP.Start()
-	r.audioRTP.Start()
+	// Phase 4: Commit everything under lock
+	r.mu.Lock()
+	r.mediaInfo = info
+	r.audioTracks = audioTracks
+	r.subs = subs
+	r.subFormat = subFormat
+	r.subContent = subContent
+	r.subIndex = subIndex
+	r.videoRTP = videoRTP
+	r.audioRTP = audioRTP
+	r.videoRelay = stream.NewVideoRelay(videoRTP)
+	r.audioRelay = stream.NewVideoRelay(audioRTP)
+	r.pipeline = pipeline
+	r.position = 0
+	r.lastActive = time.Now()
 
-	// Attach all existing viewer tracks to relays FIRST
+	// Attach all existing viewer tracks
 	for _, v := range r.sfu.GetAllViewers() {
 		r.videoRelay.AddTrack(v.VideoTrack)
 		r.audioRelay.AddTrack(v.AudioTrack)
 	}
+	r.mu.Unlock()
 
-	// Start relays AFTER tracks are attached
+	// Phase 5: Start RTP readers and relays (no lock needed)
+	videoRTP.Start()
+	audioRTP.Start()
 	r.videoRelay.Start()
 	r.audioRelay.Start()
 
-	r.position = 0
 	r.state.Store(int32(StatePlaying))
-	r.lastActive = time.Now()
 
 	// Broadcast state change
 	r.hub.Broadcast(signaling.Message{
@@ -294,7 +305,7 @@ func (r *Room) Play(ctx context.Context, filePath, inputType string) error {
 		PlayState: &signaling.PlaybackState{
 			Playing:  true,
 			Position: 0,
-			Speed:    r.speed,
+			Speed:    cfg.Speed,
 		},
 	})
 
@@ -350,12 +361,10 @@ func (r *Room) Resume(ctx context.Context) error {
 
 // Seek seeks to the given position (seconds).
 func (r *Room) Seek(ctx context.Context, position float64) error {
+	// Phase 1: Stop old pipeline and clear buffers (under lock)
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	r.state.Store(int32(StateSeeking))
 
-	// Broadcast seeking state
 	r.hub.Broadcast(signaling.Message{
 		Type: signaling.MsgSync,
 		PlayState: &signaling.PlaybackState{
@@ -365,27 +374,29 @@ func (r *Room) Seek(ctx context.Context, position float64) error {
 		},
 	})
 
-	// Restart pipeline at new position
 	if r.pipeline != nil {
 		r.pipeline.Stop()
+		r.pipeline = nil
 	}
-
 	if r.videoRTP != nil {
 		r.videoRTP.ClearBuffer()
 	}
 	if r.audioRTP != nil {
 		r.audioRTP.ClearBuffer()
 	}
-
 	r.position = position
 
-	// Create new pipeline
+	// Snapshot config for pipeline (under lock)
 	inputType := r.inputType
 	if inputType == "" {
 		inputType = "local"
 	}
-	r.pipeline = media.NewPipeline(media.PipelineConfig{
-		InputPath:    r.mediaInfo.Path,
+	mediaPath := ""
+	if r.mediaInfo != nil {
+		mediaPath = r.mediaInfo.Path
+	}
+	cfg := media.PipelineConfig{
+		InputPath:    mediaPath,
 		InputType:    inputType,
 		SeekPosition: position,
 		Speed:        r.speed,
@@ -399,27 +410,34 @@ func (r *Room) Seek(ctx context.Context, position float64) error {
 		AudioBitrate: r.audioBitrate,
 		FPS:          r.fps,
 		FFmpegPath:   r.ffmpegPath,
-	})
+	}
+	r.mu.Unlock()
 
-	r.pipeline.OnStatusChange = func(s media.Status) {
+	// Phase 2: Create and start pipeline (no lock — may be slow)
+	pipeline := media.NewPipeline(cfg)
+	pipeline.OnStatusChange = func(s media.Status) {
 		if s == media.StatusError {
 			r.state.Store(int32(StateError))
 		}
 	}
-	r.pipeline.OnError = func(err error) {
+	pipeline.OnError = func(err error) {
 		r.state.Store(int32(StateError))
 		fmt.Printf("[room] pipeline error (seek): %v\n", err)
 	}
 
-	if err := r.pipeline.Start(context.Background()); err != nil {
+	if err := pipeline.Start(context.Background()); err != nil {
 		r.state.Store(int32(StateError))
 		return fmt.Errorf("restart pipeline for seek: %w", err)
 	}
-
-	if r.pipeline.Status() != media.StatusRunning {
+	if pipeline.Status() != media.StatusRunning {
 		r.state.Store(int32(StateError))
 		return fmt.Errorf("pipeline failed after seek")
 	}
+
+	// Phase 3: Commit (under lock)
+	r.mu.Lock()
+	r.pipeline = pipeline
+	r.mu.Unlock()
 
 	r.state.Store(int32(StatePlaying))
 
