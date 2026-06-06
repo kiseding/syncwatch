@@ -4,67 +4,66 @@ import { api } from './api.js';
 import JASSUB from 'jassub';
 
 const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => document.querySelectorAll(sel);
 
-let pc = null;
-let ws = null;
-let syncChannel = null;
-let reconnectAttempts = 0;
-const MAX_RECONNECT = 10;
+let pc = null, ws = null, subRenderer = null;
+let reconnectAttempts = 0, reconnectTimer = null;
+const MAX_RECONNECT = 20;
 
 // ====== Navigation ======
 window.navigate = function (screen) {
-  $$('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const el = document.getElementById(`${screen}-screen`);
-  if (el) {
-    el.classList.add('active');
-    store.set('screen', screen);
-    if (screen === 'admin') updateAdmin();
-  }
+  if (el) { el.classList.add('active'); store.set('screen', screen); if (screen === 'admin') updateAdmin(); }
 };
 
-// ====== Login (Viewer) ======
+// ====== Viewer Login ======
 $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const pwd = $('#password-input').value;
-  const btn = $('#login-btn');
-  const err = $('#login-error');
+  const btn = $('#login-btn'), err = $('#login-error');
   btn.disabled = true; btn.textContent = '验证中...'; err.classList.add('hidden');
   try {
     const r = await api.login(pwd);
-    store.login(r.token, r.role);
+    store.login(r.token, 'viewer');
     $('#password-input').value = '';
-    navigate('player');
-    connectWebSocket();
-  } catch (ex) {
-    err.textContent = ex.message; err.classList.remove('hidden');
-  } finally {
-    btn.disabled = false; btn.textContent = '进入观影室';
-  }
+    enterViewer();
+  } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+  finally { btn.disabled = false; btn.textContent = '进入观影室'; }
 });
 
 // ====== Admin Login ======
 $('#admin-login-form')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const pwd = $('#admin-password-input').value;
-  const btn = $('#admin-login-btn');
-  const err = $('#admin-login-error');
+  const btn = $('#admin-login-btn'), err = $('#admin-login-error');
   btn.disabled = true; btn.textContent = '验证中...'; err.classList.add('hidden');
   try {
     const r = await api.adminLogin(pwd);
-    store.login(r.token, r.role);
+    store.login(r.token, 'host');
     $('#admin-password-input').value = '';
     $('#admin-login-panel').classList.add('hidden');
     $('#admin-dashboard').classList.remove('hidden');
-    showHostControls(true);
-    navigate('player');
-    connectWebSocket();
-  } catch (ex) {
-    err.textContent = ex.message; err.classList.remove('hidden');
-  } finally {
-    btn.disabled = false; btn.textContent = '进入控制台';
-  }
+    enterHost();
+  } catch (ex) { err.textContent = ex.message; err.classList.remove('hidden'); }
+  finally { btn.disabled = false; btn.textContent = '进入控制台'; }
 });
+
+// ====== Enter Modes ======
+function enterViewer() {
+  navigate('player');
+  document.getElementById('player-screen').classList.add('web-fullscreen');
+  $('#host-controls').classList.add('hidden');
+  $('#viewer-overlay').classList.remove('hidden');
+  connectWebSocket();
+}
+
+function enterHost() {
+  navigate('player');
+  $('#host-controls').classList.remove('hidden');
+  $('#viewer-overlay').classList.add('hidden');
+  document.getElementById('player-screen').classList.remove('web-fullscreen');
+  connectWebSocket();
+}
 
 // ====== WebSocket ======
 function connectWebSocket() {
@@ -76,17 +75,23 @@ function connectWebSocket() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
 
-  ws.onopen = () => { reconnectAttempts = 0; };
+  ws.onopen = () => { reconnectAttempts = 0; console.log('[WS] open'); };
   ws.onmessage = (e) => handleWSMessage(JSON.parse(e.data));
-  ws.onclose = () => { store.set('connection.status', 'disconnected'); updateConnectionUI(); scheduleReconnect(); };
+  ws.onclose = () => {
+    store.set('connection.status', 'disconnected');
+    updateConnectionUI();
+    scheduleReconnect();
+  };
+  ws.onerror = () => {};
 }
 
 function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
   if (reconnectAttempts >= MAX_RECONNECT) return;
   const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 30000);
   reconnectAttempts++;
   showReconnect(true);
-  setTimeout(connectWebSocket, delay);
+  reconnectTimer = setTimeout(connectWebSocket, delay);
 }
 
 function handleWSMessage(msg) {
@@ -97,14 +102,15 @@ function handleWSMessage(msg) {
     case 'state':        handleStateUpdate(msg.play_state); break;
     case 'sync':         handleStateUpdate(msg.play_state); break;
     case 'subtitle':     initSubtitle(msg.from, msg.text); break;
-    case 'system':       statusToast(msg.text); break;
-    case 'error':        statusToast(msg.message); break;
+    case 'system':       updateViewerCount(msg.text); break;
+    case 'error':        console.error(msg.message); break;
   }
 }
 
 // ====== WebRTC ======
 async function handleOffer(sdp) {
   try {
+    if (pc) { pc.close(); pc = null; }
     pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
 
     pc.ontrack = (event) => {
@@ -115,7 +121,7 @@ async function handleOffer(sdp) {
     };
 
     pc.onicecandidate = (event) => {
-      if (event.candidate) {
+      if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'ice-candidate', candidate: event.candidate.candidate,
           sdp_mid: event.candidate.sdpMid, sdp_mline_index: event.candidate.sdpMLineIndex }));
       }
@@ -124,15 +130,23 @@ async function handleOffer(sdp) {
     pc.oniceconnectionstatechange = () => {
       store.set('connection.iceState', pc.iceConnectionState);
       updateConnectionUI();
-      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') showReconnect(true);
+      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+        showReconnect(true);
+      } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        showReconnect(false);
+      }
     };
 
     pc.ondatachannel = (event) => {
       if (event.channel.label === 'sync') {
-        syncChannel = event.channel;
         event.channel.onmessage = (e) => {
           const m = JSON.parse(e.data);
           if (m.type === 'position') store.set('playback.position', m.t);
+          else if (m.type === 'pause' || m.type === 'resume' || m.type === 'seek') {
+            store.set('playback.position', m.position);
+            store.set('playback.state', m.type === 'pause' ? 'paused' : 'playing');
+            updatePlayerUI();
+          }
         };
       }
     };
@@ -140,14 +154,16 @@ async function handleOffer(sdp) {
     await pc.setRemoteDescription({ type: 'offer', sdp });
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    ws.send(JSON.stringify({ type: 'answer', sdp: answer.sdp }));
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'answer', sdp: answer.sdp }));
+    }
   } catch (err) { console.error('[WebRTC]', err); }
 }
 
 async function handleICECandidate(msg) {
   try {
     if (pc && msg.candidate) await pc.addIceCandidate({ candidate: msg.candidate, sdpMid: msg.sdp_mid, sdpMLineIndex: msg.sdp_mline_index });
-  } catch (err) {}
+  } catch (e) {}
 }
 
 function handleJoined(rs) {
@@ -161,7 +177,8 @@ function handleJoined(rs) {
     sel.classList.toggle('hidden', rs.audio_tracks.length <= 1);
     sel.value = rs.selected_audio || 0;
   }
-  showReconnect(false); updatePlayerUI();
+  showReconnect(false);
+  updatePlayerUI();
 }
 
 function handleStateUpdate(ps) {
@@ -173,17 +190,13 @@ function handleStateUpdate(ps) {
 }
 
 // ====== Subtitle ======
-let subRenderer = null;
-
 async function initSubtitle(format, content) {
   if (subRenderer) { try { subRenderer.destroy(); } catch(e) {} subRenderer = null; }
   if (!content) return;
   try {
-    const video = $('#main-video');
-    const canvas = $('#subtitle-canvas');
+    const video = $('#main-video'), canvas = $('#subtitle-canvas');
     canvas.width = video.clientWidth || 1280;
     canvas.height = video.clientHeight || 720;
-    canvas.style.display = 'block';
     subRenderer = new JASSUB({
       video, canvas, subContent: content,
       workerUrl: '/jassub/jassub-worker.js',
@@ -194,18 +207,12 @@ async function initSubtitle(format, content) {
 }
 
 // ====== Host Controls ======
-function showHostControls(show) { $('#host-controls').classList.toggle('hidden', !show); }
-store.on('role', (r) => showHostControls(r === 'host'));
-if (store.get('role') === 'host') showHostControls(true);
-
 $('#btn-play-pause').addEventListener('click', async () => {
-  const s = store.get('playback.state');
-  try { s === 'playing' ? await api.pause() : await api.resume(); } catch(e) {}
+  try { store.get('playback.state') === 'playing' ? await api.pause() : await api.resume(); } catch(e) {}
 });
 
 $('#seek-bar').addEventListener('input', async (e) => {
-  const d = store.get('playback.duration');
-  if (!d) return;
+  const d = store.get('playback.duration'); if (!d) return;
   try { await api.seek((e.target.value / 100) * d); } catch(e) {}
 });
 
@@ -217,7 +224,6 @@ $('#audio-select').addEventListener('change', async (e) => {
   try { await api.audioTrack(parseInt(e.target.value)); } catch(e) {}
 });
 
-// Force sync — re-fetch playback state from server
 $('#btn-force-sync').addEventListener('click', async () => {
   try {
     const s = await api.state();
@@ -225,39 +231,27 @@ $('#btn-force-sync').addEventListener('click', async () => {
     store.set('playback.position', s.position || 0);
     store.set('playback.speed', s.speed || 1.0);
     updatePlayerUI();
-    statusToast('已同步');
-  } catch(e) { statusToast('同步失败'); }
+  } catch(e) {}
 });
 
-// Web fullscreen — fill the browser viewport
 $('#btn-web-fullscreen').addEventListener('click', () => {
   document.getElementById('player-screen').classList.toggle('web-fullscreen');
 });
 
-// True fullscreen — use Fullscreen API
 $('#btn-fullscreen').addEventListener('click', () => {
   const el = $('#video-container');
-  if (document.fullscreenElement) {
-    document.exitFullscreen();
-  } else {
-    el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
-  }
+  document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
 });
 
 document.addEventListener('fullscreenchange', () => {
-  if (document.fullscreenElement) {
-    $('#main-video').style.objectFit = 'contain';
-  } else {
-    $('#main-video').style.objectFit = '';
-  }
+  $('#main-video').style.objectFit = document.fullscreenElement ? 'contain' : '';
 });
 
-// File/URL loading
+// File/URL
 $('#btn-open-file').addEventListener('click', () => {
-  const path = prompt('输入媒体文件路径（服务器本地路径）:');
+  const path = prompt('输入媒体文件路径:');
   if (path) loadMedia(path);
 });
-
 $('#btn-load-url').addEventListener('click', () => {
   const url = $('#url-input').value.trim();
   if (url) loadMedia(url);
@@ -272,53 +266,57 @@ async function loadMedia(path) {
       $('#status-text').textContent = '正在初始化流媒体...';
       for (let i = 0; i < 60; i++) {
         await new Promise(r => setTimeout(r, 1000));
-        try {
-          const s = await api.state();
-          if (s.state === 'playing') {
-            $('#video-status').classList.add('hidden');
-            updatePlayerUI();
-            return;
-          }
-        } catch(e) {}
+        try { const s = await api.state(); if (s.state === 'playing') { $('#video-status').classList.add('hidden'); updatePlayerUI(); return; } } catch(e) {}
       }
-      $('#status-text').textContent = '启动超时，请刷新重试';
-      return;
+      $('#status-text').textContent = '启动超时';
+    } else {
+      $('#video-status').classList.add('hidden');
     }
-    $('#video-status').classList.add('hidden');
-  } catch (err) {
-    $('#status-text').textContent = `错误: ${err.message}`;
-  }
+  } catch (err) { $('#status-text').textContent = `错误: ${err.message}`; }
 }
 
-// ====== UI ======
+// ====== Viewer Overlay ======
+let overlayTimer = null;
+$('#viewer-overlay').addEventListener('click', () => {
+  clearTimeout(overlayTimer);
+  $('#viewer-overlay').classList.add('active');
+  updatePlayerUI();
+  overlayTimer = setTimeout(() => $('#viewer-overlay').classList.remove('active'), 5000);
+});
+
+// ====== UI Updates ======
 function updateConnectionUI() {
-  $('#connection-status').className = 'status-dot ' + store.get('connection.status');
+  const s = store.get('connection.status');
+  const dot = $('#connection-status');
+  if (dot) dot.className = 'status-dot ' + s;
+  const reEl = $('#reconnect-overlay');
+  if (reEl) reEl.classList.toggle('hidden', s !== 'connecting' || reconnectAttempts === 0);
 }
 
 function updatePlayerUI() {
-  const p = store.get('playback');
-  const d = p.duration || 0;
-  const bar = $('#seek-bar');
-  if (d > 0) { bar.max = 100; bar.value = (p.position / d) * 100; }
-  $('#time-display').textContent = `${formatTime(p.position)} / ${formatTime(d)}`;
+  const p = store.get('playback'), d = p.duration || 0;
+  const bar = $('#seek-bar'); if (bar && d > 0) { bar.max = 100; bar.value = (p.position / d) * 100; }
+  const td = $('#time-display'); if (td) td.textContent = `${fmt(p.position)} / ${fmt(d)}`;
+  const vp = $('#viewer-position'); if (vp && d > 0) vp.style.width = `${(p.position / d) * 100}%`;
+  const vt = $('#viewer-time'); if (vt) vt.textContent = `${fmt(p.position)} / ${fmt(d)}`;
   const btn = $('#btn-play-pause');
-  btn.innerHTML = p.state === 'playing'
+  if (btn) btn.innerHTML = p.state === 'playing'
     ? '<svg width="24" height="24" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" fill="currentColor"/><rect x="14" y="4" width="4" height="16" fill="currentColor"/></svg>'
     : '<svg width="24" height="24" viewBox="0 0 24 24"><polygon points="8,5 19,12 8,19" fill="currentColor"/></svg>';
 }
 
 function showReconnect(show) {
-  $('#reconnect-overlay').classList.toggle('hidden', !show);
-  store.set('connection.status', show ? 'connecting' : 'connected');
+  const reEl = $('#reconnect-overlay');
+  if (reEl) reEl.classList.toggle('hidden', !show);
+  if (show) store.set('connection.status', 'connecting'); else store.set('connection.status', 'connected');
   updateConnectionUI();
 }
 
 function hideVideoStatus() { $('#video-status').classList.add('hidden'); }
 
-// Brief status toast
-function statusToast(text) {
-  const el = document.getElementById('viewer-count');
-  if (el) { el.textContent = text; setTimeout(() => { el.textContent = `${store.get('viewers')} 人在线`; }, 3000); }
+function updateViewerCount(text) {
+  const el = $('#viewer-count');
+  if (el) { el.textContent = text; setTimeout(() => { el.textContent = `${store.get('viewers') || 0} 人在线`; }, 3000); }
 }
 
 // ====== Admin ======
@@ -332,24 +330,18 @@ async function updateAdmin() {
   } catch(e) {}
 }
 
-// ====== Utilities ======
-function formatTime(s) {
-  if (!s || isNaN(s)) return '00:00';
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
-  return h > 0 ? `${pad(h)}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
-}
-function pad(n) { return String(n).padStart(2, '0'); }
+// ====== Utils ======
+function fmt(s) { if (!s || isNaN(s)) return '00:00'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60); return h>0?`${p(h)}:${p(m)}:${p(sec)}`:`${p(m)}:${p(sec)}`; }
+function p(n) { return String(n).padStart(2,'0'); }
 
 // ====== Keyboard ======
 document.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.target.tagName === 'INPUT') return;
   if (store.get('role') !== 'host') return;
-  switch (e.code) {
-    case 'Space': e.preventDefault(); $('#btn-play-pause').click(); break;
-    case 'ArrowLeft': e.preventDefault(); seekRelative(-10); break;
-    case 'ArrowRight': e.preventDefault(); seekRelative(10); break;
-    case 'KeyF': if (!e.ctrlKey && !e.metaKey) { $('#btn-fullscreen').click(); } break;
-  }
+  if (e.code === 'Space') { e.preventDefault(); $('#btn-play-pause').click(); }
+  if (e.code === 'ArrowLeft') { e.preventDefault(); seekRelative(-10); }
+  if (e.code === 'ArrowRight') { e.preventDefault(); seekRelative(10); }
+  if (e.code === 'KeyF' && !e.ctrlKey && !e.metaKey) { $('#btn-fullscreen').click(); }
 });
 
 async function seekRelative(d) {
@@ -357,15 +349,14 @@ async function seekRelative(d) {
 }
 
 // ====== Init ======
-(function init() {
-  const token = store.get('token'), role = store.get('role'), path = window.location.pathname;
+(function () {
+  const token = store.get('token'), role = store.get('role'), path = location.pathname;
   if (token && role === 'host') {
-    showHostControls(true);
     $('#admin-login-panel')?.classList.add('hidden');
     $('#admin-dashboard')?.classList.remove('hidden');
-    navigate('player'); connectWebSocket();
+    enterHost();
   } else if (token && role === 'viewer') {
-    navigate('player'); connectWebSocket();
+    enterViewer();
   } else if (path === '/admin') {
     navigate('admin');
   } else {

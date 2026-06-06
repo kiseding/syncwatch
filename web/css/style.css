@@ -374,6 +374,56 @@ select {
   .logo h1 { font-size: 1.5rem; }
 }
 
+/* Viewer Overlay */
+.viewer-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 2rem 1rem 1rem;
+  background: linear-gradient(transparent, rgba(0,0,0,0.8));
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.viewer-overlay.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.viewer-progress {
+  width: 100%;
+  height: 4px;
+  background: rgba(255,255,255,0.2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+#viewer-position {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.3s linear;
+  width: 0%;
+}
+
+#viewer-time {
+  font-size: 0.85rem;
+  color: #fff;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hide viewer overlay for host */
+#player-screen:not(.web-fullscreen) .viewer-overlay,
+#host-controls:not(.hidden) ~ .viewer-overlay {
+  display: none;
+}
+
 /* PWA standalone tweaks */
 @media (display-mode: standalone) {
   body {

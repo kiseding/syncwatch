@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pion/rtp"
 	pion "github.com/pion/webrtc/v4"
@@ -47,9 +48,10 @@ type SFU struct {
 
 // NewSFU creates a new Selective Forwarding Unit manager.
 func NewSFU(iceServers []pion.ICEServer) *SFU {
-	// Setting engine for custom behavior
+	// Setting engine for proper ICE candidate discovery
 	s := pion.SettingEngine{}
 	s.SetIncludeLoopbackCandidate(true)
+	s.SetICETimeouts(5*time.Second, 25*time.Second, 2*time.Second)
 
 	// Media engine with default codecs
 	m := &pion.MediaEngine{}
@@ -109,17 +111,13 @@ func (s *SFU) CreateSession(viewerID, role string) (*ViewerSession, error) {
 		return nil, fmt.Errorf("add audio track: %w", err)
 	}
 
-	// For host, create DataChannel for sync
-	var syncChannel *pion.DataChannel
-	if role == "host" {
-		var err error
-		syncChannel, err = pc.CreateDataChannel("sync", &pion.DataChannelInit{
-			Ordered: func() *bool { v := true; return &v }(),
-		})
-		if err != nil {
-			pc.Close()
-			return nil, fmt.Errorf("create sync channel: %w", err)
-		}
+	// Create DataChannel for sync (all roles need it)
+	syncChannel, err := pc.CreateDataChannel("sync", &pion.DataChannelInit{
+		Ordered: func() *bool { v := true; return &v }(),
+	})
+	if err != nil {
+		pc.Close()
+		return nil, fmt.Errorf("create sync channel: %w", err)
 	}
 
 	session := &ViewerSession{
