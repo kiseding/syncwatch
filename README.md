@@ -75,18 +75,12 @@ webrtc:
   #    credential: ""
 
 auth:
-  password_hash: "$argon2id$..."        # 观影密码
-  admin_password_hash: "$argon2id$..."   # 管理密码（不填则共用观影密码）
+  password: "666"                # 观影密码（明文，自动哈希存储）
+  admin_password: "89757"        # 管理密码（明文，不填则共用观影密码）
   rate_limit_per_min: 5
 ```
 
-### 生成密码哈希
-
-```go
-// 使用 Go 生成 Argon2id 哈希
-import "golang.org/x/crypto/argon2"
-// 或启动时留空 password_hash，控制台会输出默认密码的哈希
-```
+密码直接写明文，启动时自动转为 Argon2 哈希。也可以填 `password_hash` 使用预生成的哈希。
 
 ## 使用说明
 

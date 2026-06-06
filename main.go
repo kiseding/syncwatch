@@ -41,6 +41,22 @@ func main() {
 		logger.Fatal().Err(err).Msg("failed to load config")
 	}
 
+	// Auto-hash plain-text passwords
+	if cfg.Auth.Password != "" {
+		hash, err := auth.HashPassword(cfg.Auth.Password)
+		if err != nil {
+			logger.Fatal().Err(err).Msg("failed to hash password")
+		}
+		cfg.Auth.PasswordHash = hash
+	}
+	if cfg.Auth.AdminPassword != "" {
+		hash, err := auth.HashPassword(cfg.Auth.AdminPassword)
+		if err != nil {
+			logger.Fatal().Err(err).Msg("failed to hash admin password")
+		}
+		cfg.Auth.AdminPasswordHash = hash
+	}
+
 	if cfg.Auth.PasswordHash == "" {
 		defaultHash, _ := auth.HashPassword("syncwatch")
 		logger.Info().Str("hash", defaultHash).Msg("no password set, using default: syncwatch")

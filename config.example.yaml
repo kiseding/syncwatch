@@ -42,8 +42,11 @@ transcode:
   preset: "veryfast"
 
 auth:
-  password_hash: ""         # Viewer password (Argon2 hash), empty = auto-generate
-  admin_password_hash: ""   # Admin password (Argon2 hash), empty = same as viewer
+  password: ""              # 观影密码（明文，启动时自动哈希）
+  admin_password: ""        # 管理密码（明文，不填则共用观影密码）
+  # 或者直接用哈希（优先级低于明文）：
+  # password_hash: "$argon2id$..."
+  # admin_password_hash: "$argon2id$..."
   rate_limit_per_min: 5
   session_timeout: 86400    # 24 hours
   jwt_secret: ""            # Auto-generated if empty

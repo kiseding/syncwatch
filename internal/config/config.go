@@ -68,7 +68,9 @@ type TranscodeConfig struct {
 }
 
 type AuthConfig struct {
-	PasswordHash      string `yaml:"password_hash"`
+	Password          string `yaml:"password"`           // Plain text, auto-hashed on load
+	AdminPassword     string `yaml:"admin_password"`     // Plain text, auto-hashed on load
+	PasswordHash      string `yaml:"password_hash"`      // Or set hash directly
 	AdminPasswordHash string `yaml:"admin_password_hash"`
 	RateLimitPerMin   int    `yaml:"rate_limit_per_min"`
 	SessionTimeout    int    `yaml:"session_timeout"`
