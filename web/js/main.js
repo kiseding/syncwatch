@@ -74,17 +74,33 @@ function enterHost() {
 // ====== WebSocket ======
 function connectWebSocket() {
   const token = store.get('token');
-  if (!token) return;
+  if (!token) { console.warn('[SyncWatch] No token, skipping WebSocket connect'); return; }
   store.set('connection.status', 'connecting');
   updateConnectionUI();
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
+  const url = `${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`;
+  console.log('[SyncWatch] Connecting WebSocket:', url.replace(token, 'TOKEN'));
+  ws = new WebSocket(url);
 
-  ws.onopen = () => { dbg('WS', 'open'); store.set('connection.status', 'connected'); updateConnectionUI(); };
+  ws.onopen = () => {
+    console.log('[SyncWatch] WebSocket connected');
+    dbg('WS', 'open');
+    store.set('connection.status', 'connected');
+    updateConnectionUI();
+  };
   ws.onmessage = (e) => handleWSMessage(JSON.parse(e.data));
-  ws.onclose = (ev) => { dbg('WS', 'close '+ev.code); store.set('connection.status', 'disconnected'); updateConnectionUI(); setTimeout(connectWebSocket, 500); };
-  ws.onerror = () => { dbg('WS', 'error'); };
+  ws.onclose = (ev) => {
+    console.warn('[SyncWatch] WebSocket closed:', ev.code, ev.reason);
+    dbg('WS', 'close ' + ev.code);
+    store.set('connection.status', 'disconnected');
+    updateConnectionUI();
+    setTimeout(connectWebSocket, 500);
+  };
+  ws.onerror = () => {
+    console.error('[SyncWatch] WebSocket error');
+    dbg('WS', 'error');
+  };
 }
 
 function handleWSMessage(msg) {
@@ -108,9 +124,11 @@ async function handleOffer(sdp) {
     pc = new RTCPeerConnection({ iceServers: servers });
 
     pc.ontrack = (event) => {
+      console.log('[SyncWatch] Track received:', event.track.kind);
       dbg('Track', event.track.kind);
       if (event.track.kind === 'video') {
         $('#main-video').srcObject = event.streams[0];
+        $('#main-video').play().catch(e => console.warn('[SyncWatch] video.play failed:', e));
         hideVideoStatus();
       }
     };

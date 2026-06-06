@@ -109,6 +109,13 @@ func main() {
 	// WebSocket signaling
 	setupWebSocket(mux, tokenManager, sfu, hub, room, &logger, iceServers)
 
+	// Debug endpoint
+	mux.HandleFunc("GET /api/debug", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"ws_clients":%d,"sfu_sessions":%d,"state":"%s","position":%.1f}`,
+			hub.ClientCount(), sfu.ViewerCount(), room.State().String(), room.GetPosition())
+	})
+
 	// Serve frontend
 	serveFrontend(mux, &logger)
 
@@ -194,6 +201,7 @@ func setupWebSocket(mux *http.ServeMux, tm *auth.TokenManager, sfu *webrtc.SFU,
 		}
 
 		viewerID := sfu.GenerateViewerID()
+		logger.Info().Str("viewer", viewerID).Str("role", claims.Role).Str("remote", req.RemoteAddr).Msg("ws connected")
 
 		session, err := sfu.CreateSession(viewerID, claims.Role)
 		if err != nil {
