@@ -333,16 +333,6 @@ func (p *Pipeline) Stop() error {
 	return nil
 }
 
-// VideoAddr returns the UDP address FFmpeg is sending video RTP to.
-func (p *Pipeline) VideoAddr() string {
-	return fmt.Sprintf("127.0.0.1:%d", p.cfg.VideoPort)
-}
-
-// AudioAddr returns the UDP address FFmpeg is sending audio RTP to.
-func (p *Pipeline) AudioAddr() string {
-	return fmt.Sprintf("127.0.0.1:%d", p.cfg.AudioPort)
-}
-
 // Status returns the current pipeline status.
 func (p *Pipeline) Status() Status {
 	return Status(p.status.Load())

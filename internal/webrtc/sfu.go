@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pion/rtp"
 	pion "github.com/pion/webrtc/v4"
 )
 
@@ -18,9 +17,6 @@ type ViewerSession struct {
 	AudioTrack  *pion.TrackLocalStaticRTP
 	SyncChannel *pion.DataChannel
 	Role        string // "host" or "viewer"
-
-	OnSyncMessage func(msg []byte) // Called when DataChannel message received
-	OnChatMessage func(from string, msg []byte)
 
 	mu sync.RWMutex
 }
@@ -146,16 +142,7 @@ func (s *SFU) CreateSession(viewerID, role string) (*ViewerSession, error) {
 	// Handle incoming DataChannel (from viewer)
 	pc.OnDataChannel(func(dc *pion.DataChannel) {
 		dc.OnMessage(func(msg pion.DataChannelMessage) {
-			switch dc.Label() {
-			case "sync":
-				if session.OnSyncMessage != nil {
-					session.OnSyncMessage(msg.Data)
-				}
-			case "chat":
-				if session.OnChatMessage != nil {
-					session.OnChatMessage(session.ID, msg.Data)
-				}
-			}
+			// DataChannel messages handled by JS frontend via WebSocket signaling
 		})
 	})
 
@@ -224,34 +211,6 @@ func (s *SFU) ViewerCount() int {
 func (s *SFU) GenerateViewerID() string {
 	id := atomic.AddUint64(&s.nextID, 1)
 	return fmt.Sprintf("viewer-%d", id)
-}
-
-// BroadcastSync sends a message to all viewers via DataChannel.
-func (s *SFU) BroadcastSync(msg []byte) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	for _, v := range s.viewers {
-		if v.SyncChannel != nil && v.SyncChannel.ReadyState() == pion.DataChannelStateOpen {
-			v.SyncChannel.Send(msg)
-		}
-	}
-}
-
-// BroadcastRTP fowards an RTP packet to all viewer tracks.
-func (s *SFU) BroadcastRTP(pkt *rtp.Packet, trackKind string) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	for _, v := range s.viewers {
-		var err error
-		if trackKind == "video" && v.VideoTrack != nil {
-			err = v.VideoTrack.WriteRTP(pkt)
-		} else if trackKind == "audio" && v.AudioTrack != nil {
-			err = v.VideoTrack.WriteRTP(pkt)
-		}
-		_ = err // Individual write failures are non-fatal
-	}
 }
 
 // GetAllViewers returns a copy of the viewer list.

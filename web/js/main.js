@@ -5,7 +5,7 @@ import JASSUB from 'jassub';
 
 const $ = (sel) => document.querySelector(sel);
 
-let pc = null, ws = null, subRenderer = null;
+let pc = null, ws = null, subRenderer = null, iceServers = null;
 
 // Debug panel
 function dbg(key, val) {
@@ -81,13 +81,11 @@ function connectWebSocket() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`);
 
-  ws.onopen = () => { reconnectAttempts = 0; dbg('WS', 'open'); store.set('connection.status', 'connected'); updateConnectionUI(); };
+  ws.onopen = () => { dbg('WS', 'open'); store.set('connection.status', 'connected'); updateConnectionUI(); };
   ws.onmessage = (e) => handleWSMessage(JSON.parse(e.data));
   ws.onclose = (ev) => { dbg('WS', 'close '+ev.code); store.set('connection.status', 'disconnected'); updateConnectionUI(); setTimeout(connectWebSocket, 500); };
   ws.onerror = () => { dbg('WS', 'error'); };
 }
-
-// Reconnect is now handled inline in ws.onclose with a simple 500ms retry
 
 function handleWSMessage(msg) {
   switch (msg.type) {
@@ -106,7 +104,8 @@ function handleWSMessage(msg) {
 async function handleOffer(sdp) {
   try {
     if (pc) { pc.close(); pc = null; }
-    pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    const servers = iceServers && iceServers.length ? iceServers : [{ urls: 'stun:stun.l.google.com:19302' }];
+    pc = new RTCPeerConnection({ iceServers: servers });
 
     pc.ontrack = (event) => {
       dbg('Track', event.track.kind);
@@ -163,11 +162,18 @@ function handleJoined(rs) {
   store.set('playback', { state: rs.state, position: rs.position || 0, duration: rs.media?.duration || 0, speed: rs.speed || 1.0 });
   if (rs.media) store.set('media.filename', rs.media.filename);
   if (rs.subtitle?.content) initSubtitle(rs.subtitle.format, rs.subtitle.content);
+  if (rs.ice_servers) iceServers = rs.ice_servers;
   if (rs.audio_tracks) {
     const sel = $('#audio-select');
     sel.innerHTML = rs.audio_tracks.map((t, i) => `<option value="${i}">${t.language || t.title || 'Track '+(i+1)}</option>`).join('');
     sel.classList.toggle('hidden', rs.audio_tracks.length <= 1);
     sel.value = rs.selected_audio || 0;
+  }
+  if (rs.subtitle_tracks && rs.subtitle_tracks.length > 0) {
+    const sel = $('#subtitle-select');
+    sel.innerHTML = `<option value="-1">关闭</option>` + rs.subtitle_tracks.map((t, i) => `<option value="${i}">${t.language || t.title || 'Subtitle '+(i+1)}</option>`).join('');
+    sel.classList.toggle('hidden', false);
+    sel.value = rs.selected_sub !== undefined ? String(rs.selected_sub) : '-1';
   }
   updatePlayerUI();
 }
@@ -213,6 +219,10 @@ $('#speed-select').addEventListener('change', async (e) => {
 
 $('#audio-select').addEventListener('change', async (e) => {
   try { await api.audioTrack(parseInt(e.target.value)); } catch(e) {}
+});
+
+$('#subtitle-select').addEventListener('change', async (e) => {
+  try { await api.subtitle(parseInt(e.target.value)); } catch(e) {}
 });
 
 $('#btn-force-sync').addEventListener('click', async () => {
@@ -303,7 +313,17 @@ function hideVideoStatus() { $('#video-status').classList.add('hidden'); }
 
 function updateViewerCount(text) {
   const el = $('#viewer-count');
-  if (el) { el.textContent = text; setTimeout(() => { el.textContent = `${store.get('viewers') || 0} 人在线`; }, 3000); }
+  if (el) { el.textContent = text; setTimeout(refreshViewerCount, 3000); }
+}
+
+async function refreshViewerCount() {
+  try {
+    const s = await api.status();
+    store.set('viewers', s.viewers || 0);
+    $('#viewer-count').textContent = `${s.viewers || 0} 人在线`;
+  } catch(e) {
+    $('#viewer-count').textContent = '0 人在线';
+  }
 }
 
 // ====== Admin ======

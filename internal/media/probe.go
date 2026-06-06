@@ -3,6 +3,7 @@ package media
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -84,29 +85,30 @@ func Probe(ffprobePath, filePath string) (*MediaInfo, error) {
 func ScanDir(dir string, allowedExts []string) ([]MediaInfo, error) {
 	var results []MediaInfo
 
-	// Quick file scan first
-	cmd := exec.Command("find", dir, "-type", "f")
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("scan directory: %w", err)
+	// Build set for O(1) extension lookup
+	extSet := make(map[string]bool, len(allowedExts))
+	for _, ext := range allowedExts {
+		extSet[strings.ToLower(ext)] = true
 	}
 
-	files := strings.Split(strings.TrimSpace(string(output)), "\n")
-	for _, file := range files {
-		if file == "" {
-			continue
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // Skip inaccessible entries
 		}
-		ext := strings.ToLower(filepath.Ext(file))
-		for _, allowed := range allowedExts {
-			if ext == allowed {
-				info := MediaInfo{
-					Path:   file,
-					Format: ext,
-				}
-				results = append(results, info)
-				break
-			}
+		if d.IsDir() {
+			return nil
 		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if extSet[ext] {
+			results = append(results, MediaInfo{
+				Path:   path,
+				Format: ext,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan directory %s: %w", dir, err)
 	}
 
 	return results, nil

@@ -15,7 +15,8 @@ import (
 
 // Handler handles HTTP API requests.
 type Handler struct {
-	Room *room.Room
+	Room        *room.Room
+	AllowedExts []string
 }
 
 // NewHandler creates a new API handler.
@@ -219,7 +220,10 @@ func (h *Handler) MediaScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	exts := []string{".mp4", ".mkv", ".avi", ".mov", ".webm"}
+	exts := h.AllowedExts
+	if len(exts) == 0 {
+		exts = []string{".mp4", ".mkv", ".avi", ".mov", ".webm"}
+	}
 	files, err := media.ScanDir(dir, exts)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

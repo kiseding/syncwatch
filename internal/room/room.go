@@ -60,6 +60,7 @@ type Room struct {
 	subIndex    int    // selected subtitle index (-1 = none)
 	subFormat   string // loaded subtitle format
 	subContent  string // loaded subtitle content
+	inputType   string // "local" or "url" — preserved for seek restarts
 
 	// Pipeline
 	pipeline *media.Pipeline
@@ -147,6 +148,8 @@ func (r *Room) State() State {
 func (r *Room) Play(ctx context.Context, filePath, inputType string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	r.inputType = inputType
 
 	// Stop any existing pipeline
 	if r.pipeline != nil {
@@ -377,9 +380,13 @@ func (r *Room) Seek(ctx context.Context, position float64) error {
 	r.position = position
 
 	// Create new pipeline
+	inputType := r.inputType
+	if inputType == "" {
+		inputType = "local"
+	}
 	r.pipeline = media.NewPipeline(media.PipelineConfig{
 		InputPath:    r.mediaInfo.Path,
-		InputType:    "local",
+		InputType:    inputType,
 		SeekPosition: position,
 		Speed:        r.speed,
 		VideoIndex:   r.pipelineCfgVideoIdx(),
@@ -473,16 +480,22 @@ func (r *Room) SwitchAudioTrack(ctx context.Context, index int) error {
 
 // GetMediaInfo returns the current media information.
 func (r *Room) GetMediaInfo() *media.MediaInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.mediaInfo
 }
 
 // GetAudioTracks returns available audio tracks.
 func (r *Room) GetAudioTracks() []media.TrackInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.audioTracks
 }
 
 // GetSubtitles returns available subtitle files.
 func (r *Room) GetSubtitles() []media.SubtitleInfo {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.subs
 }
 
@@ -521,11 +534,15 @@ func (r *Room) GetPosition() float64 {
 	if r.pipeline != nil {
 		return r.pipeline.Elapsed()
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.position
 }
 
 // GetDuration returns the media duration.
 func (r *Room) GetDuration() float64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	if r.mediaInfo != nil {
 		return r.mediaInfo.Duration
 	}
@@ -534,16 +551,22 @@ func (r *Room) GetDuration() float64 {
 
 // GetSpeed returns the current playback speed.
 func (r *Room) GetSpeed() float64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.speed
 }
 
 // GetAudioIndex returns the selected audio track index.
 func (r *Room) GetAudioIndex() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.audioIndex
 }
 
 // GetSubIndex returns the selected subtitle index.
 func (r *Room) GetSubIndex() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.subIndex
 }
 

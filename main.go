@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -87,7 +88,8 @@ func main() {
 
 	// API routes (use router for readability)
 	handler := api.NewHandler(room)
-	apiRouter := api.NewRouter(handler, tokenManager, rateLimiter,
+	handler.AllowedExts = cfg.Media.AllowedExtensions
+	apiRouter := api.NewRouter(tokenManager, rateLimiter,
 		cfg.Auth.RateLimitPerMin, cfg.Auth.PasswordHash, cfg.Auth.AdminPasswordHash)
 
 	mux.HandleFunc("POST /api/auth", apiRouter.HandleAuth)
@@ -206,11 +208,8 @@ func setupWebSocket(mux *http.ServeMux, tm *auth.TokenManager, sfu *webrtc.SFU,
 		// Attach viewer to room
 		r.AddViewer(session)
 
-		// Handle messages from this client
-		hub.OnMessage = func(c *signaling.Client, msg signaling.Message) {
-			if c.ID != viewerID {
-				return
-			}
+		// Handle messages from this client (per-client, won't be overwritten)
+		client.OnMessage = func(c *signaling.Client, msg signaling.Message) {
 			switch msg.Type {
 			case signaling.MsgAnswer:
 				answer := pion.SessionDescription{
@@ -280,6 +279,24 @@ func setupWebSocket(mux *http.ServeMux, tm *auth.TokenManager, sfu *webrtc.SFU,
 		roomState.AudioTracks = audioTracks
 		roomState.SelectedAudio = r.GetAudioIndex()
 		roomState.SelectedSub = r.GetSubIndex()
+
+		// Subtitle tracks
+		var subTracks []signaling.TrackInfo
+		for _, s := range r.GetSubtitles() {
+			name := filepath.Base(s.Path)
+			subTracks = append(subTracks, signaling.TrackInfo{
+				Index: s.Index, Type: "subtitle",
+				Language: s.Language, Title: name + " (" + s.Format + ")",
+			})
+		}
+		roomState.SubTracks = subTracks
+
+		// Pass ICE servers to frontend for PeerConnection config
+		for _, srv := range iceServers {
+			roomState.IceServers = append(roomState.IceServers, signaling.ICEServerConfig{
+				URLs: srv.URLs, Username: srv.Username, Credential: srv.Credential,
+			})
+		}
 
 		hub.SendTo(viewerID, signaling.Message{
 			Type:      signaling.MsgJoined,

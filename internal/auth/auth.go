@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -87,11 +88,12 @@ func NewTokenManager(secret string, timeoutSeconds int) *TokenManager {
 }
 
 func (tm *TokenManager) Generate(role string) (string, error) {
+	now := time.Now()
 	claims := &Claims{
 		Role: role,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tm.timeout)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(now.Add(tm.timeout)),
+			IssuedAt:  jwt.NewNumericDate(now),
 		},
 	}
 
@@ -120,27 +122,69 @@ func (tm *TokenManager) Validate(tokenStr string) (*Claims, error) {
 
 // RateLimiter wraps golang.org/x/time/rate.
 type RateLimiter struct {
-	limiters map[string]*rate.Limiter
+	mu          sync.RWMutex
+	limiters    map[string]*rate.Limiter
+	lastAccess  map[string]time.Time
+	stopCleanup chan struct{}
 }
 
 func NewRateLimiter() *RateLimiter {
-	return &RateLimiter{
-		limiters: make(map[string]*rate.Limiter),
+	rl := &RateLimiter{
+		limiters:    make(map[string]*rate.Limiter),
+		lastAccess:  make(map[string]time.Time),
+		stopCleanup: make(chan struct{}),
+	}
+	// Periodically clean up stale limiters (every 10 minutes, TTL 30 min)
+	go rl.cleanupLoop(10*time.Minute, 30*time.Minute)
+	return rl
+}
+
+func (rl *RateLimiter) cleanupLoop(interval, ttl time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			rl.mu.Lock()
+			now := time.Now()
+			for key, last := range rl.lastAccess {
+				if now.Sub(last) > ttl {
+					delete(rl.limiters, key)
+					delete(rl.lastAccess, key)
+				}
+			}
+			rl.mu.Unlock()
+		case <-rl.stopCleanup:
+			return
+		}
 	}
 }
 
 // Allow checks if the given key is allowed to proceed.
 // rateLimit is attempts per minute.
 func (rl *RateLimiter) Allow(key string, rateLimit int) bool {
+	rl.mu.RLock()
 	limiter, ok := rl.limiters[key]
+	rl.mu.RUnlock()
+
 	if !ok {
 		// Allow 'rateLimit' requests per minute with burst of rateLimit*2
 		burst := rateLimit * 2
 		if burst < 5 {
 			burst = 5
 		}
-		limiter = rate.NewLimiter(rate.Limit(float64(rateLimit)/60.0), burst)
-		rl.limiters[key] = limiter
+		rl.mu.Lock()
+		limiter, ok = rl.limiters[key]
+		if !ok {
+			limiter = rate.NewLimiter(rate.Limit(float64(rateLimit)/60.0), burst)
+			rl.limiters[key] = limiter
+		}
+		rl.lastAccess[key] = time.Now()
+		rl.mu.Unlock()
+	} else {
+		rl.mu.Lock()
+		rl.lastAccess[key] = time.Now()
+		rl.mu.Unlock()
 	}
 	return limiter.Allow()
 }

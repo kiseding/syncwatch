@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -12,6 +13,7 @@ type SubtitleInfo struct {
 	Path     string `json:"path"`
 	Format   string `json:"format"` // "srt", "ass", "ssa", "vtt"
 	Language string `json:"language,omitempty"`
+	Index    int    `json:"index"` // 0-based index in subtitle list
 }
 
 // ExtractSubtitles extracts embedded subtitles or finds external subtitle files.
@@ -29,6 +31,7 @@ func ExtractSubtitles(ffmpegPath, videoPath string) ([]SubtitleInfo, error) {
 			subs = append(subs, SubtitleInfo{
 				Path:   candidate,
 				Format: strings.TrimPrefix(ext, "."),
+				Index:  len(subs),
 			})
 		}
 
@@ -40,6 +43,7 @@ func ExtractSubtitles(ffmpegPath, videoPath string) ([]SubtitleInfo, error) {
 				subs = append(subs, SubtitleInfo{
 					Path:   m,
 					Format: strings.TrimPrefix(ext, "."),
+					Index:  len(subs),
 				})
 			}
 		}
@@ -70,7 +74,7 @@ func ExtractSubtitleTrack(ffmpegPath, videoPath string, trackIndex int) (string,
 	cmd := exec.Command(ffmpegPath,
 		"-v", "quiet",
 		"-i", videoPath,
-		"-map", "0:s:"+string(rune('0'+trackIndex)),
+		"-map", "0:s:"+strconv.Itoa(trackIndex),
 		"-c:s", "copy",
 		"-f", "ass",
 		outputFile,
@@ -81,7 +85,7 @@ func ExtractSubtitleTrack(ffmpegPath, videoPath string, trackIndex int) (string,
 		cmd = exec.Command(ffmpegPath,
 			"-v", "quiet",
 			"-i", videoPath,
-			"-map", "0:s:"+string(rune('0'+trackIndex)),
+			"-map", "0:s:"+strconv.Itoa(trackIndex),
 			outputFile,
 		)
 		if err := cmd.Run(); err != nil {

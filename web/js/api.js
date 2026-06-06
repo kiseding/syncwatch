@@ -31,6 +31,7 @@ export const api = {
   seek: (position) => request('POST', '/api/playback/seek', { position }),
   speed: (speed) => request('POST', '/api/playback/speed', { speed }),
   audioTrack: (index) => request('POST', '/api/playback/audio', { index }),
+  subtitle: (index) => request('POST', '/api/playback/subtitle', { index }),
 
   // Status & Media
   status: () => request('GET', '/api/status'),

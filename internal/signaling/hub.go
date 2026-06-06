@@ -18,7 +18,6 @@ const (
 	MsgICECandidate = "ice-candidate"
 	MsgState        = "state"
 	MsgSync         = "sync"
-	MsgChat         = "chat"
 	MsgSystem       = "system"
 	MsgError        = "error"
 )
@@ -41,22 +40,30 @@ type Message struct {
 	Raw       json.RawMessage `json:"-"`
 }
 
+// ICEServerConfig represents a single ICE server for signaling.
+type ICEServerConfig struct {
+	URLs       []string `json:"urls"`
+	Username   string   `json:"username,omitempty"`
+	Credential string   `json:"credential,omitempty"`
+}
+
 // RoomState sent to newly joined viewers.
 type RoomState struct {
-	State       string         `json:"state"`
-	Position    float64        `json:"position"`
-	Speed       float64        `json:"speed"`
-	Media       *MediaState    `json:"media,omitempty"`
-	Subtitle    *SubtitleData  `json:"subtitle,omitempty"`
-	AudioTracks []TrackInfo    `json:"audio_tracks,omitempty"`
-	SubTracks   []TrackInfo    `json:"subtitle_tracks,omitempty"`
-	SelectedAudio int          `json:"selected_audio"`
-	SelectedSub   int          `json:"selected_sub"`
+	State         string            `json:"state"`
+	Position      float64           `json:"position"`
+	Speed         float64           `json:"speed"`
+	Media         *MediaState       `json:"media,omitempty"`
+	Subtitle      *SubtitleData     `json:"subtitle,omitempty"`
+	AudioTracks   []TrackInfo       `json:"audio_tracks,omitempty"`
+	SubTracks     []TrackInfo       `json:"subtitle_tracks,omitempty"`
+	SelectedAudio int               `json:"selected_audio"`
+	SelectedSub   int               `json:"selected_sub"`
+	IceServers    []ICEServerConfig `json:"ice_servers,omitempty"`
 }
 
 // MediaState describes the currently loaded media.
 type MediaState struct {
-	Filename string `json:"filename"`
+	Filename string  `json:"filename"`
 	Duration float64 `json:"duration"`
 }
 
@@ -70,7 +77,7 @@ type SubtitleData struct {
 // TrackInfo describes a media track for signaling.
 type TrackInfo struct {
 	Index    int    `json:"index"`
-	Type     string `json:"type"`     // "audio" or "subtitle"
+	Type     string `json:"type"` // "audio" or "subtitle"
 	Language string `json:"language,omitempty"`
 	Title    string `json:"title,omitempty"`
 }
@@ -84,24 +91,23 @@ type PlaybackState struct {
 
 // Client represents a WebSocket-connected client.
 type Client struct {
-	ID    string
-	Role  string // "host" or "viewer"
-	Conn  *websocket.Conn
-	Send  chan []byte
-	hub   *Hub
-	mu    sync.Mutex
+	ID        string
+	Role      string // "host" or "viewer"
+	Conn      *websocket.Conn
+	Send      chan []byte
+	hub       *Hub
+	mu        sync.Mutex
+	OnMessage func(client *Client, msg Message) // per-client message handler
 }
 
-// Hub manages all WebSocket connections for signaling and chat.
+// Hub manages all WebSocket connections for signaling.
 type Hub struct {
-	clients    map[string]*Client
-	mu         sync.RWMutex
+	clients map[string]*Client
+	mu      sync.RWMutex
 
 	// Callbacks
-	OnJoin       func(client *Client)
-	OnLeave      func(clientID string)
-	OnMessage    func(client *Client, msg Message)
-	OnChat       func(client *Client, text string)
+	OnJoin  func(client *Client)
+	OnLeave func(clientID string)
 }
 
 // NewHub creates a new signaling hub.
@@ -287,20 +293,8 @@ func (c *Client) readPump() {
 		}
 		msg.Raw = data
 
-		// Handle chat messages specially
-		if msg.Type == MsgChat {
-			msg.From = c.ID
-			msg.Timestamp = time.Now().UnixMilli()
-			// Re-broadcast to all others
-			c.hub.BroadcastExcept(msg, c.ID)
-			if c.hub.OnChat != nil {
-				c.hub.OnChat(c, msg.Text)
-			}
-			continue
-		}
-
-		if c.hub.OnMessage != nil {
-			c.hub.OnMessage(c, msg)
+		if c.OnMessage != nil {
+			c.OnMessage(c, msg)
 		}
 	}
 }
