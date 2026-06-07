@@ -4,47 +4,23 @@
 server:
   host: "0.0.0.0"
   port: 8080
-  public_url: ""           # Public URL for PWA manifest
-  tls: false
-  cert_file: ""
-  key_file: ""
-
-webrtc:
-  ice_lite: true
-  udp_port_start: 60000
-  udp_port_end: 60100
-  stun_servers:
-    - "stun:stun.l.google.com:19302"
-  turn_servers: []          # Optional TURN servers
-  ipv6_first: true
-  public_ips: []
+  public_url: ""     # Public URL for media file serving, e.g. "http://your-ip:8080"
 
 media:
-  ffmpeg_path: "/usr/bin/ffmpeg"
-  ffprobe_path: "/usr/bin/ffprobe"
-  scan_dirs:                # Directories to scan for media files
-    - "/home/yys/media"
+  scan_dirs:                # Directories to scan for local media files
+    - "/home/user/media"
   allowed_extensions:
     - ".mp4"
     - ".mkv"
     - ".avi"
     - ".mov"
     - ".webm"
-  hardware_acceleration: false
-
-transcode:
-  video_codec: "libvpx"
-  audio_codec: "libopus"
-  video_bitrate: "2000k"
-  audio_bitrate: "128k"
-  max_resolution: "1920x1080"
-  fps: 30
-  preset: "veryfast"
+  upload_dir: "/tmp/syncwatch_uploads"  # Host upload storage
 
 auth:
-  password: ""              # 观影密码（明文，启动时自动哈希）
-  admin_password: ""        # 管理密码（明文，不填则共用观影密码）
-  # 或者直接用哈希（优先级低于明文）：
+  password: ""              # Viewer password (plain text, auto-hashed on start)
+  admin_password: ""        # Admin password
+  # Or use pre-hashed:
   # password_hash: "$argon2id$..."
   # admin_password_hash: "$argon2id$..."
   rate_limit_per_min: 5

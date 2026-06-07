@@ -1,11 +1,11 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/kiseding/syncwatch/internal/media"
@@ -17,6 +17,9 @@ import (
 type Handler struct {
 	Room        *room.Room
 	AllowedExts []string
+	UploadDir   string
+	FFprobePath string
+	ScanDirs    []string // configured media scan directories
 }
 
 // NewHandler creates a new API handler.
@@ -24,7 +27,9 @@ func NewHandler(r *room.Room) *Handler {
 	return &Handler{Room: r}
 }
 
-// Play starts or resumes playback.
+// ---- Playback ----
+
+// Play sets the media source and starts playback.
 func (h *Handler) Play(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Path string `json:"path"`
@@ -38,23 +43,50 @@ func (h *Handler) Play(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Detect URL vs local path
-	inputType := "local"
+	var sourceType room.SourceType
 	if strings.HasPrefix(req.Path, "http://") || strings.HasPrefix(req.Path, "https://") {
-		inputType = "url"
+		sourceType = room.SourceURL
+	} else {
+		sourceType = room.SourceLocal
 	}
 
-	// Start playback asynchronously so the HTTP request doesn't time out
-	// on slow-to-initialize streams (e.g., m3u8)
+	// Probe media in background
 	go func() {
-		if err := h.Room.Play(context.Background(), req.Path, inputType); err != nil {
-			fmt.Fprintf(os.Stderr, "[play] ERROR: %v\n", err)
+		info, err := media.Probe(h.FFprobePath, req.Path)
+		if err == nil {
+			var audioTracks []media.TrackInfo
+			for _, t := range info.Tracks {
+				if t.Type == "audio" {
+					audioTracks = append(audioTracks, t)
+				}
+			}
+			h.Room.SetMediaInfo(info, audioTracks)
+		}
+
+		// Detect subtitles
+		subs, _ := media.ExtractSubtitles("ffmpeg", req.Path)
+		if len(subs) > 0 {
+			h.Room.SetSubtitles(subs)
 		}
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]interface{}{
-		"status": "loading",
-		"path":   req.Path,
+	h.Room.SetMedia(req.Path, sourceType)
+
+	// Broadcast media change to all viewers
+	url := h.Room.GetMediaURL()
+	h.Room.Hub().Broadcast(signaling.Message{
+		Type: signaling.MsgState,
+		PlayState: &signaling.PlaybackState{
+			Playing:  true,
+			Position: 0,
+			Speed:    h.Room.GetSpeed(),
+		},
+		Text: url,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status": "playing",
+		"url":    url,
 	})
 }
 
@@ -66,10 +98,7 @@ func (h *Handler) Pause(w http.ResponseWriter, r *http.Request) {
 
 // Resume resumes playback.
 func (h *Handler) Resume(w http.ResponseWriter, r *http.Request) {
-	if err := h.Room.Resume(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	h.Room.Resume()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "playing"})
 }
 
@@ -82,12 +111,7 @@ func (h *Handler) Seek(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	if err := h.Room.Seek(r.Context(), req.Position); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
+	h.Room.Seek(req.Position)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"status":   "playing",
 		"position": req.Position,
@@ -103,25 +127,16 @@ func (h *Handler) SetSpeed(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	// Validate speed
 	validSpeeds := map[float64]bool{0.5: true, 1.0: true, 1.25: true, 1.5: true, 2.0: true}
 	if !validSpeeds[req.Speed] {
 		writeError(w, http.StatusBadRequest, "speed must be one of: 0.5, 1.0, 1.25, 1.5, 2.0")
 		return
 	}
-
-	if err := h.Room.SetSpeed(r.Context(), req.Speed); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"speed": req.Speed,
-	})
+	h.Room.SetSpeed(req.Speed)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"speed": req.Speed})
 }
 
-// SwitchAudio switches the audio track.
+// SwitchAudio switches audio track.
 func (h *Handler) SwitchAudio(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Index int `json:"index"`
@@ -130,18 +145,11 @@ func (h *Handler) SwitchAudio(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	if err := h.Room.SwitchAudioTrack(r.Context(), req.Index); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"audio_index": req.Index,
-	})
+	h.Room.SwitchAudioTrack(req.Index)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"audio_index": req.Index})
 }
 
-// SwitchSubtitle switches the subtitle track.
+// SwitchSubtitle switches subtitle track.
 func (h *Handler) SwitchSubtitle(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Index int `json:"index"`
@@ -150,23 +158,13 @@ func (h *Handler) SwitchSubtitle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
 	if err := h.Room.SwitchSubtitle(req.Index); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	// Broadcast subtitle change to all viewers
+	// Broadcast subtitle data to viewers
 	if subFmt, subContent, subIdx := h.Room.GetSubtitleData(); subIdx >= 0 {
-		h.Room.Hub().Broadcast(signaling.Message{
-			Type: signaling.MsgState,
-			PlayState: &signaling.PlaybackState{
-				Playing:  h.Room.State().String() == "playing",
-				Position: h.Room.GetPosition(),
-				Speed:    h.Room.GetSpeed(),
-			},
-		})
-		// Also send subtitle via dedicated message
 		h.Room.Hub().Broadcast(signaling.Message{
 			Type: "subtitle",
 			Text: subContent,
@@ -174,41 +172,134 @@ func (h *Handler) SwitchSubtitle(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	writeJSON(w, http.StatusOK, map[string]interface{}{"subtitle_index": req.Index})
+}
+
+// ---- Upload ----
+
+// Upload handles file upload from host's browser.
+func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<30) // 4GB max
+
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "file too large or invalid form")
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing file field")
+		return
+	}
+	defer file.Close()
+
+	// Create upload dir if needed
+	if err := os.MkdirAll(h.UploadDir, 0755); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create upload dir")
+		return
+	}
+
+	// Save file
+	dstPath := filepath.Join(h.UploadDir, header.Filename)
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save file")
+		return
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to write file")
+		return
+	}
+
+	h.Room.SetMedia(dstPath, room.SourceUpload)
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"subtitle_index": req.Index,
+		"status": "uploaded",
+		"path":   dstPath,
+		"url":    h.Room.GetMediaURL(),
 	})
 }
+
+// ServeFile serves local media files to viewers.
+func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeError(w, http.StatusBadRequest, "path parameter required")
+		return
+	}
+
+	// Security: only allow files within scan dirs or upload dir
+	allowed := false
+	absPath, _ := filepath.Abs(path)
+	for _, dir := range h.AllowedDirs() {
+		absDir, _ := filepath.Abs(dir)
+		if strings.HasPrefix(absPath, absDir) {
+			allowed = true
+			break
+		}
+	}
+	if absPath == h.UploadDir || strings.HasPrefix(absPath, h.UploadDir+string(filepath.Separator)) {
+		allowed = true
+	}
+	if !allowed {
+		writeError(w, http.StatusForbidden, "access denied")
+		return
+	}
+
+	http.ServeFile(w, r, path)
+}
+
+// AllowedDirs returns dirs that are allowed for file serving.
+func (h *Handler) AllowedDirs() []string {
+	dirs := make([]string, len(h.ScanDirs))
+	copy(dirs, h.ScanDirs)
+	return dirs
+}
+
+// ---- Status / Info ----
 
 // Status returns room and server status.
 func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
 	stats := h.Room.Stats()
-
-	// Add audio tracks info
-	audioTracks := h.Room.GetAudioTracks()
-	subtitles := h.Room.GetSubtitles()
-
-	stats["audio_tracks"] = audioTracks
-	stats["subtitles"] = subtitles
+	stats["audio_tracks"] = h.Room.GetAudioTracks()
+	stats["subtitles"] = h.Room.GetSubtitles()
 	stats["selected_audio"] = h.Room.GetAudioIndex()
 	stats["selected_subtitle"] = h.Room.GetSubIndex()
-
 	writeJSON(w, http.StatusOK, stats)
 }
 
-// MediaInfo returns information about media files.
+// MediaInfo returns ffprobe info for a media file.
 func (h *Handler) MediaInfo(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		writeError(w, http.StatusBadRequest, "path query parameter required")
 		return
 	}
-
-	info, err := media.Probe("ffprobe", path)
+	if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+		allowed := false
+		absPath, _ := filepath.Abs(path)
+		for _, dir := range h.AllowedDirs() {
+			absDir, _ := filepath.Abs(dir)
+			if strings.HasPrefix(absPath, absDir) {
+				allowed = true
+				break
+			}
+		}
+		if absPath == h.UploadDir || strings.HasPrefix(absPath, h.UploadDir+string(filepath.Separator)) {
+			allowed = true
+		}
+		if !allowed {
+			writeError(w, http.StatusForbidden, "access denied")
+			return
+		}
+	}
+	info, err := media.Probe(h.FFprobePath, path)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	writeJSON(w, http.StatusOK, info)
 }
 
@@ -219,7 +310,6 @@ func (h *Handler) MediaScan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "dir query parameter required")
 		return
 	}
-
 	exts := h.AllowedExts
 	if len(exts) == 0 {
 		exts = []string{".mp4", ".mkv", ".avi", ".mov", ".webm"}
@@ -229,31 +319,27 @@ func (h *Handler) MediaScan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"files": files,
-	})
+	writeJSON(w, http.StatusOK, map[string]interface{}{"files": files})
 }
 
-// SignalingState returns the current signaling/room state for a newly joined viewer.
+// SignalingState returns the current room state.
 func (h *Handler) SignalingState(w http.ResponseWriter, r *http.Request) {
 	state := &signaling.RoomState{
 		State:    h.Room.State().String(),
 		Position: h.Room.GetPosition(),
 		Speed:    h.Room.GetSpeed(),
 	}
-
 	if info := h.Room.GetMediaInfo(); info != nil {
 		state.Media = &signaling.MediaState{
 			Filename: info.Path,
 			Duration: info.Duration,
 		}
 	}
-
 	writeJSON(w, http.StatusOK, state)
 }
 
-// Helper functions
+// ---- Helpers ----
+
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

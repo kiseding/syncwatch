@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	pion "github.com/pion/webrtc/v4"
 	"github.com/rs/zerolog"
 
 	"github.com/kiseding/syncwatch/internal/api"
@@ -22,7 +21,6 @@ import (
 	"github.com/kiseding/syncwatch/internal/config"
 	"github.com/kiseding/syncwatch/internal/room"
 	"github.com/kiseding/syncwatch/internal/signaling"
-	"github.com/kiseding/syncwatch/internal/webrtc"
 )
 
 //go:embed all:web/dist
@@ -57,38 +55,40 @@ func main() {
 		}
 		cfg.Auth.AdminPasswordHash = hash
 	}
-
 	if cfg.Auth.PasswordHash == "" {
 		defaultHash, _ := auth.HashPassword("syncwatch")
 		logger.Info().Str("hash", defaultHash).Msg("no password set, using default: syncwatch")
 		cfg.Auth.PasswordHash = defaultHash
 	}
 
+	// Ensure upload dir exists
+	if err := os.MkdirAll(cfg.Media.UploadDir, 0755); err != nil {
+		logger.Fatal().Err(err).Msg("failed to create upload dir")
+	}
+
 	// Auth
 	tokenManager := auth.NewTokenManager(cfg.Auth.JWTSecret, cfg.Auth.SessionTimeout)
 	rateLimiter := auth.NewRateLimiter()
 
-	// ICE servers
-	iceServers := buildICEServers(cfg)
+	// Server base URL for constructing media URLs
+	publicURL := cfg.Server.PublicURL
+	if publicURL == "" {
+		publicURL = fmt.Sprintf("http://%s:%d", cfg.Server.Host, cfg.Server.Port)
+	}
 
 	// Core components
-	sfu := webrtc.NewSFU(iceServers, cfg.WebRTC.PublicIPs)
 	hub := signaling.NewHub()
-	room := room.NewRoom(sfu, hub, cfg.Media.FFmpegPath, cfg.Media.FFprobePath)
-	room.SetTranscodeConfig(
-		cfg.Transcode.VideoCodec,
-		cfg.Transcode.AudioCodec,
-		cfg.Transcode.VideoBitrate,
-		cfg.Transcode.AudioBitrate,
-		cfg.Transcode.FPS,
-	)
+	room := room.NewRoom(hub, publicURL, cfg.Media.UploadDir)
 
 	// HTTP mux
 	mux := http.NewServeMux()
 
-	// API routes (use router for readability)
+	// API
 	handler := api.NewHandler(room)
 	handler.AllowedExts = cfg.Media.AllowedExtensions
+	handler.UploadDir = cfg.Media.UploadDir
+	handler.FFprobePath = "ffprobe"
+	handler.ScanDirs = cfg.Media.ScanDirs
 	apiRouter := api.NewRouter(tokenManager, rateLimiter,
 		cfg.Auth.RateLimitPerMin, cfg.Auth.PasswordHash, cfg.Auth.AdminPasswordHash)
 
@@ -101,20 +101,22 @@ func main() {
 	mux.Handle("POST /api/playback/speed", apiRouter.HostOnly(handler.SetSpeed))
 	mux.Handle("POST /api/playback/audio", apiRouter.HostOnly(handler.SwitchAudio))
 	mux.Handle("POST /api/playback/subtitle", apiRouter.HostOnly(handler.SwitchSubtitle))
+	mux.Handle("POST /api/upload", apiRouter.HostOnly(handler.Upload))
+	mux.Handle("GET /api/media/file", apiRouter.AuthRequired(handler.ServeFile))
 	mux.Handle("GET /api/status", apiRouter.AuthRequired(handler.Status))
 	mux.Handle("GET /api/media/info", apiRouter.AuthRequired(handler.MediaInfo))
 	mux.Handle("GET /api/media/scan", apiRouter.AuthRequired(handler.MediaScan))
 	mux.Handle("GET /api/state", apiRouter.AuthRequired(handler.SignalingState))
 
-	// WebSocket signaling
-	setupWebSocket(mux, tokenManager, sfu, hub, room, &logger, iceServers)
-
 	// Debug endpoint
 	mux.HandleFunc("GET /api/debug", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"ws_clients":%d,"sfu_sessions":%d,"state":"%s","position":%.1f}`,
-			hub.ClientCount(), sfu.ViewerCount(), room.State().String(), room.GetPosition())
+		fmt.Fprintf(w, `{"ws_clients":%d,"state":"%s","position":%.1f,"media_url":"%s"}`,
+			hub.ClientCount(), room.State().String(), room.GetPosition(), room.GetMediaURL())
 	})
+
+	// WebSocket signaling
+	setupWebSocket(mux, tokenManager, hub, room, &logger)
 
 	// Serve frontend
 	serveFrontend(mux, &logger)
@@ -123,9 +125,9 @@ func main() {
 	server := &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
 		Handler:      api.CORSMiddleware(mux),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  60 * time.Second, // Allow large uploads
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	// Graceful shutdown
@@ -146,180 +148,107 @@ func main() {
 	logger.Info().Msg("server stopped")
 }
 
-// buildICEServers converts config to pion ICE servers.
-func buildICEServers(cfg *config.Config) []pion.ICEServer {
-	var servers []pion.ICEServer
-	for _, url := range cfg.WebRTC.STUNServers {
-		servers = append(servers, pion.ICEServer{URLs: []string{url}})
-	}
-	for _, turn := range cfg.WebRTC.TURNServers {
-		servers = append(servers, pion.ICEServer{
-			URLs:       turn.URLs,
-			Username:   turn.Username,
-			Credential: turn.Credential,
-		})
-	}
-	return servers
-}
-
 // setupWebSocket configures the WebSocket signaling endpoint.
-func setupWebSocket(mux *http.ServeMux, tm *auth.TokenManager, sfu *webrtc.SFU,
-	hub *signaling.Hub, r *room.Room, logger *zerolog.Logger, iceServers []pion.ICEServer) {
+func setupWebSocket(mux *http.ServeMux, tm *auth.TokenManager,
+	hub *signaling.Hub, r *room.Room, logger *zerolog.Logger) {
 
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool { return true },
-	}
-
-	// Handle ICE candidates from server-side
-	sfu.OnViewerJoin = func(session *webrtc.ViewerSession) {
-		session.PeerConn.OnICECandidate(func(candidate *pion.ICECandidate) {
-			if candidate == nil {
-				return
-			}
-			c := candidate.ToJSON()
-			hub.SendTo(session.ID, signaling.Message{
-				Type:      signaling.MsgICECandidate,
-				Candidate: c.Candidate,
-				SDPMid:    *c.SDPMid,
-				SDPMIndex: int(*c.SDPMLineIndex),
-			})
-		})
 	}
 
 	mux.HandleFunc("GET /ws", func(w http.ResponseWriter, req *http.Request) {
 		tokenStr := req.URL.Query().Get("token")
 		claims, err := tm.Validate(tokenStr)
 		if err != nil {
+			logger.Warn().Err(err).Str("remote", req.RemoteAddr).Msg("ws auth failed")
 			http.Error(w, "invalid token", http.StatusUnauthorized)
 			return
 		}
 
 		conn, err := upgrader.Upgrade(w, req, nil)
 		if err != nil {
-			logger.Error().Err(err).Msg("ws upgrade failed")
+			logger.Error().Err(err).Str("remote", req.RemoteAddr).Msg("ws upgrade failed")
 			return
 		}
 
-		viewerID := sfu.GenerateViewerID()
+		viewerID := fmt.Sprintf("viewer-%d", time.Now().UnixNano())
 		logger.Info().Str("viewer", viewerID).Str("role", claims.Role).Str("remote", req.RemoteAddr).Msg("ws connected")
-
-		session, err := sfu.CreateSession(viewerID, claims.Role)
-		if err != nil {
-			logger.Error().Err(err).Str("viewer", viewerID).Msg("create session failed")
-			conn.Close()
-			return
-		}
 
 		// Register WS client
 		client := hub.Register(viewerID, claims.Role, conn)
 
-		// Attach viewer to room
-		r.AddViewer(session)
+		// Send current room state (joined message)
+		sendJoined(client, r)
 
-		// Handle messages from this client (per-client, won't be overwritten)
+		// Handle messages from this client
 		client.OnMessage = func(c *signaling.Client, msg signaling.Message) {
-			switch msg.Type {
-			case signaling.MsgAnswer:
-				answer := pion.SessionDescription{
-					Type: pion.SDPTypeAnswer,
-					SDP:  msg.SDP,
-				}
-				session.PeerConn.SetRemoteDescription(answer)
-
-			case signaling.MsgICECandidate:
-				candidateStr, ok := msg.Candidate.(string)
-				if !ok {
-					return
-				}
-				mid := msg.SDPMid
-				candidateInit := pion.ICECandidateInit{
-					Candidate: candidateStr,
-				}
-				if mid != "" {
-					candidateInit.SDPMid = &mid
-				}
-				session.PeerConn.AddICECandidate(candidateInit)
-			}
+			logger.Debug().Str("viewer", c.ID).Str("type", msg.Type).Msg("ws msg")
 		}
-
-		// Send room state + ICE servers FIRST (frontend needs ICE config before creating PC)
-		roomState := &signaling.RoomState{
-			State:    r.State().String(),
-			Position: r.GetPosition(),
-			Speed:    r.GetSpeed(),
-		}
-		if info := r.GetMediaInfo(); info != nil {
-			roomState.Media = &signaling.MediaState{
-				Filename: info.Path,
-				Duration: info.Duration,
-			}
-		}
-		if subFmt, subContent, subIdx := r.GetSubtitleData(); subIdx >= 0 {
-			roomState.Subtitle = &signaling.SubtitleData{
-				Format:  subFmt,
-				Content: subContent,
-				Index:   subIdx,
-			}
-		}
-		var audioTracks []signaling.TrackInfo
-		for _, t := range r.GetAudioTracks() {
-			audioTracks = append(audioTracks, signaling.TrackInfo{
-				Index: t.Index, Type: "audio",
-				Language: t.Language, Title: t.Title,
-			})
-		}
-		roomState.AudioTracks = audioTracks
-		roomState.SelectedAudio = r.GetAudioIndex()
-		roomState.SelectedSub = r.GetSubIndex()
-
-		var subTracks []signaling.TrackInfo
-		for _, s := range r.GetSubtitles() {
-			name := filepath.Base(s.Path)
-			subTracks = append(subTracks, signaling.TrackInfo{
-				Index: s.Index, Type: "subtitle",
-				Language: s.Language, Title: name + " (" + s.Format + ")",
-			})
-		}
-		roomState.SubTracks = subTracks
-
-		for _, srv := range iceServers {
-			cred, _ := srv.Credential.(string)
-			roomState.IceServers = append(roomState.IceServers, signaling.ICEServerConfig{
-				URLs: srv.URLs, Username: srv.Username, Credential: cred,
-			})
-		}
-
-		hub.SendTo(viewerID, signaling.Message{
-			Type:      signaling.MsgJoined,
-			RoomState: roomState,
-		})
-
-		// Create and send SDP offer
-		offer, err := session.PeerConn.CreateOffer(nil)
-		if err != nil {
-			logger.Error().Err(err).Str("viewer", viewerID).Msg("create offer failed")
-			hub.Unregister(viewerID)
-			return
-		}
-		session.PeerConn.SetLocalDescription(offer)
-
-		hub.SendTo(viewerID, signaling.Message{
-			Type: signaling.MsgOffer,
-			SDP:  offer.SDP,
-		})
 
 		hub.SendSystem(fmt.Sprintf("%s 加入了房间", viewerID))
 
 		// Cleanup on disconnect
 		defer func() {
-			r.RemoveViewer(session)
-			sfu.RemoveSession(viewerID)
 			hub.SendSystem(fmt.Sprintf("%s 离开了房间", viewerID))
 		}()
-
-		_ = client // keep alive until disconnect (readPump handles cleanup)
 		select {}
 	})
+}
+
+// sendJoined sends the current room state to a newly connected client.
+func sendJoined(client *signaling.Client, r *room.Room) {
+	roomState := &signaling.RoomState{
+		State:    r.State().String(),
+		Position: r.GetPosition(),
+		Speed:    r.GetSpeed(),
+	}
+	if info := r.GetMediaInfo(); info != nil {
+		roomState.Media = &signaling.MediaState{
+			Filename: info.Path,
+			Duration: info.Duration,
+		}
+	}
+	if subFmt, subContent, subIdx := r.GetSubtitleData(); subIdx >= 0 {
+		roomState.Subtitle = &signaling.SubtitleData{
+			Format:  subFmt,
+			Content: subContent,
+			Index:   subIdx,
+		}
+	}
+	var audioTracks []signaling.TrackInfo
+	for _, t := range r.GetAudioTracks() {
+		audioTracks = append(audioTracks, signaling.TrackInfo{
+			Index: t.Index, Type: "audio",
+			Language: t.Language, Title: t.Title,
+		})
+	}
+	roomState.AudioTracks = audioTracks
+	roomState.SelectedAudio = r.GetAudioIndex()
+	roomState.SelectedSub = r.GetSubIndex()
+
+	var subTracks []signaling.TrackInfo
+	for _, s := range r.GetSubtitles() {
+		name := filepath.Base(s.Path)
+		subTracks = append(subTracks, signaling.TrackInfo{
+			Index: s.Index, Type: "subtitle",
+			Language: s.Language, Title: name + " (" + s.Format + ")",
+		})
+	}
+	roomState.SubTracks = subTracks
+
+	hub := r.Hub()
+	hub.SendTo(client.ID, signaling.Message{
+		Type:      signaling.MsgJoined,
+		RoomState: roomState,
+	})
+
+	// Also send current media URL
+	if url := r.GetMediaURL(); url != "" {
+		hub.SendTo(client.ID, signaling.Message{
+			Type:     signaling.MsgMedia,
+			MediaURL: url,
+		})
+	}
 }
 
 // serveFrontend serves the embedded or filesystem frontend with SPA fallback.
@@ -334,34 +263,25 @@ func serveFrontend(mux *http.ServeMux, logger *zerolog.Logger) {
 }
 
 // spaHandler returns a handler that serves static files with SPA fallback.
-// Paths matching static assets (with file extension) are served directly.
-// All other paths fall back to index.html.
 func spaHandler(fsys http.FileSystem) http.HandlerFunc {
 	fileServer := http.FileServer(fsys)
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
-
-		// Static assets have file extensions — serve directly
 		if hasExt(path) {
 			fileServer.ServeHTTP(w, r)
 			return
 		}
-
-		// SPA routes — try the file, fallback to index.html
 		f, err := fsys.Open(path)
 		if err == nil {
 			f.Close()
 			fileServer.ServeHTTP(w, r)
 			return
 		}
-
-		// Serve index.html for SPA routing
 		r.URL.Path = "/"
 		fileServer.ServeHTTP(w, r)
 	}
 }
 
-// hasExt checks if the path looks like a static file.
 func hasExt(path string) bool {
 	for i := len(path) - 1; i >= 0; i-- {
 		if path[i] == '.' {

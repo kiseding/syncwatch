@@ -6,3 +6,6 @@ data/
 /media/
 *.log
 .DS_Store
+
+uploads/
+*.bak

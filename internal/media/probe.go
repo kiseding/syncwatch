@@ -9,6 +9,27 @@ import (
 	"strings"
 )
 
+// TrackInfo describes a media track from FFprobe.
+type TrackInfo struct {
+	Index    int    `json:"index"`
+	Codec    string `json:"codec"`
+	Type     string `json:"type"` // "video" | "audio" | "subtitle"
+	Language string `json:"language,omitempty"`
+	Title    string `json:"title,omitempty"`
+	Width    int    `json:"width,omitempty"`
+	Height   int    `json:"height,omitempty"`
+	Channels int    `json:"channels,omitempty"`
+}
+
+// MediaInfo holds metadata about a media file.
+type MediaInfo struct {
+	Path     string      `json:"path"`
+	Duration float64     `json:"duration"`
+	Format   string      `json:"format"`
+	Size     int64       `json:"size"`
+	Tracks   []TrackInfo `json:"tracks"`
+}
+
 // ffprobeOutput matches the JSON output of ffprobe.
 type ffprobeOutput struct {
 	Format struct {
@@ -85,7 +106,6 @@ func Probe(ffprobePath, filePath string) (*MediaInfo, error) {
 func ScanDir(dir string, allowedExts []string) ([]MediaInfo, error) {
 	var results []MediaInfo
 
-	// Build set for O(1) extension lookup
 	extSet := make(map[string]bool, len(allowedExts))
 	for _, ext := range allowedExts {
 		extSet[strings.ToLower(ext)] = true
@@ -93,7 +113,7 @@ func ScanDir(dir string, allowedExts []string) ([]MediaInfo, error) {
 
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // Skip inaccessible entries
+			return nil
 		}
 		if d.IsDir() {
 			return nil

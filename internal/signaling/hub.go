@@ -11,24 +11,18 @@ import (
 
 // Message types for WebSocket communication.
 const (
-	MsgJoin         = "join"
-	MsgJoined       = "joined"
-	MsgOffer        = "offer"
-	MsgAnswer       = "answer"
-	MsgICECandidate = "ice-candidate"
-	MsgState        = "state"
-	MsgSync         = "sync"
-	MsgSystem       = "system"
-	MsgError        = "error"
+	MsgJoin   = "join"
+	MsgJoined = "joined"
+	MsgMedia  = "media"  // new media loaded, viewer should change video.src
+	MsgState  = "state"
+	MsgSync   = "sync"
+	MsgSystem = "system"
+	MsgError  = "error"
 )
 
 // Message represents a generic WebSocket message.
 type Message struct {
 	Type      string          `json:"type"`
-	SDP       string          `json:"sdp,omitempty"`
-	Candidate interface{}     `json:"candidate,omitempty"`
-	SDPMid    string          `json:"sdp_mid,omitempty"`
-	SDPMIndex int             `json:"sdp_mline_index,omitempty"`
 	Role      string          `json:"role,omitempty"`
 	RoomState *RoomState      `json:"room_state,omitempty"`
 	PlayState *PlaybackState  `json:"play_state,omitempty"`
@@ -37,14 +31,8 @@ type Message struct {
 	System    bool            `json:"system,omitempty"`
 	Message   string          `json:"message,omitempty"`
 	Timestamp int64           `json:"timestamp,omitempty"`
+	MediaURL  string          `json:"media_url,omitempty"`
 	Raw       json.RawMessage `json:"-"`
-}
-
-// ICEServerConfig represents a single ICE server for signaling.
-type ICEServerConfig struct {
-	URLs       []string `json:"urls"`
-	Username   string   `json:"username,omitempty"`
-	Credential string   `json:"credential,omitempty"`
 }
 
 // RoomState sent to newly joined viewers.
@@ -56,9 +44,8 @@ type RoomState struct {
 	Subtitle      *SubtitleData     `json:"subtitle,omitempty"`
 	AudioTracks   []TrackInfo       `json:"audio_tracks,omitempty"`
 	SubTracks     []TrackInfo       `json:"subtitle_tracks,omitempty"`
-	SelectedAudio int               `json:"selected_audio"`
-	SelectedSub   int               `json:"selected_sub"`
-	IceServers    []ICEServerConfig `json:"ice_servers,omitempty"`
+	SelectedAudio int `json:"selected_audio"`
+	SelectedSub   int `json:"selected_sub"`
 }
 
 // MediaState describes the currently loaded media.

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>WS Test</title>
+<style>body{font:16px monospace;background:#1a1a2e;color:#e8e8e8;padding:2em}
+.ok{color:#2ecc71}.fail{color:#e74c3c}.warn{color:#f39c12}</style></head>
+<body>
+<h2>SyncWatch WebSocket Connectivity Test</h2>
+<div id="log"></div>
+<script>
+const log = (msg, cls) => { const d=document.getElementById('log'); d.innerHTML+=`<div class="${cls||''}">${msg}</div>`; console.log(msg); };
+
+log(`Location: ${location.href}`, 'warn');
+log(`Protocol: ${location.protocol}`);
+
+// Step 1: Login
+const pwd = prompt('Enter password (viewer=666, host=89757):');
+const isAdmin = pwd === '89757';
+const authUrl = isAdmin ? '/api/admin/auth' : '/api/auth';
+
+fetch(authUrl, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pwd})})
+.then(r=>r.json()).then(data => {
+  if (!data.token) { log('AUTH FAILED: '+JSON.stringify(data), 'fail'); return; }
+  log('Auth OK, token: '+data.token.substring(0,30)+'... role='+data.role, 'ok');
+  
+  // Step 2: Connect WebSocket
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${proto}//${location.host}/ws?token=${encodeURIComponent(data.token)}`;
+  log(`Connecting: ${wsUrl.replace(data.token, 'TOKEN')}`, 'warn');
+  
+  const ws = new WebSocket(wsUrl);
+  ws.onopen = () => log('WS OPEN (connected!)', 'ok');
+  ws.onerror = (e) => log('WS ERROR', 'fail');
+  ws.onclose = (e) => log(`WS CLOSE code=${e.code} reason="${e.reason}"`, 'fail');
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    log(`MSG type=${m.type}`, 'ok');
+  };
+  
+  // Check after 2 seconds
+  setTimeout(() => {
+    log(`WS readyState: ${ws.readyState} (0=CONNECTING 1=OPEN 2=CLOSING 3=CLOSED)`, ws.readyState===1?'ok':'fail');
+    fetch('/api/debug').then(r=>r.json()).then(d => {
+      log(`Server ws_clients=${d.ws_clients} sfu_sessions=${d.sfu_sessions} state=${d.state}`, d.ws_clients>0?'ok':'fail');
+    });
+  }, 2000);
+}).catch(e => log('FETCH ERROR: '+e.message, 'fail'));
+</script>
+</body></html>

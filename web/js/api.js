@@ -1,19 +1,12 @@
 // HTTP API client for SyncWatch
 import { store } from './store.js';
 
-const BASE = '';
-
 async function request(method, path, body) {
-  const headers = { 'Content-Type': 'application/json' };
+  const headers = body ? { 'Content-Type': 'application/json' } : {};
   const token = store.get('token');
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch(`${BASE}${path}`, {
-    method,
-    headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
+  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
@@ -32,6 +25,14 @@ export const api = {
   speed: (speed) => request('POST', '/api/playback/speed', { speed }),
   audioTrack: (index) => request('POST', '/api/playback/audio', { index }),
   subtitle: (index) => request('POST', '/api/playback/subtitle', { index }),
+
+  // Upload
+  upload: (file) => {
+    const form = new FormData();
+    form.append('file', file);
+    const token = store.get('token');
+    return fetch('/api/upload', { method: 'POST', headers: { 'Authorization': `Bearer ${token}` }, body: form }).then(r => r.json());
+  },
 
   // Status & Media
   status: () => request('GET', '/api/status'),

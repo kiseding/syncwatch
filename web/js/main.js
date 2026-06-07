@@ -1,19 +1,11 @@
 // SyncWatch Frontend
 import { store } from './store.js';
 import { api } from './api.js';
-import JASSUB from 'jassub';
+import Hls from 'hls.js';
 
 const $ = (sel) => document.querySelector(sel);
 
-let pc = null, ws = null, subRenderer = null, iceServers = null;
-
-// Debug panel
-function dbg(key, val) {
-  const el = document.getElementById('debug-panel');
-  if (!el) return;
-  el.innerHTML = el.innerHTML.replace(new RegExp(key + ': .*', 'g'), key + ': ' + val);
-  console.log('[dbg]', key, val);
-}
+let ws = null, hls = null;
 
 // ====== Navigation ======
 window.navigate = function (screen) {
@@ -57,7 +49,6 @@ $('#admin-login-form')?.addEventListener('submit', async (e) => {
 // ====== Enter Modes ======
 function enterViewer() {
   navigate('player');
-  document.getElementById('player-screen').classList.add('web-fullscreen');
   $('#host-controls').classList.add('hidden');
   $('#viewer-overlay').classList.remove('hidden');
   connectWebSocket();
@@ -67,112 +58,60 @@ function enterHost() {
   navigate('player');
   $('#host-controls').classList.remove('hidden');
   $('#viewer-overlay').classList.add('hidden');
-  document.getElementById('player-screen').classList.remove('web-fullscreen');
   connectWebSocket();
 }
 
 // ====== WebSocket ======
 function connectWebSocket() {
   const token = store.get('token');
-  if (!token) { console.warn('[SyncWatch] No token, skipping WebSocket connect'); return; }
+  if (!token) { console.warn('[SyncWatch] No token, skipping WS'); return; }
   store.set('connection.status', 'connecting');
   updateConnectionUI();
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`;
-  console.log('[SyncWatch] Connecting WebSocket:', url.replace(token, 'TOKEN'));
+  console.log('[SyncWatch] WS connect');
   ws = new WebSocket(url);
 
   ws.onopen = () => {
-    console.log('[SyncWatch] WebSocket connected');
-    dbg('WS', 'open');
+    console.log('[SyncWatch] WS open');
     store.set('connection.status', 'connected');
     updateConnectionUI();
   };
-  ws.onmessage = (e) => handleWSMessage(JSON.parse(e.data));
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    handleWSMessage(msg);
+  };
   ws.onclose = (ev) => {
-    console.warn('[SyncWatch] WebSocket closed:', ev.code, ev.reason);
-    dbg('WS', 'close ' + ev.code);
+    console.warn('[SyncWatch] WS close', ev.code);
     store.set('connection.status', 'disconnected');
     updateConnectionUI();
-    setTimeout(connectWebSocket, 500);
+    setTimeout(connectWebSocket, 1000);
   };
-  ws.onerror = () => {
-    console.error('[SyncWatch] WebSocket error');
-    dbg('WS', 'error');
-  };
+  ws.onerror = () => console.error('[SyncWatch] WS error');
 }
 
 function handleWSMessage(msg) {
   switch (msg.type) {
-    case 'offer':        handleOffer(msg.sdp); break;
-    case 'ice-candidate': handleICECandidate(msg); break;
-    case 'joined':       handleJoined(msg.room_state); break;
-    case 'state':        handleStateUpdate(msg.play_state); break;
-    case 'sync':         handleStateUpdate(msg.play_state); break;
-    case 'subtitle':     initSubtitle(msg.from, msg.text); break;
-    case 'system':       updateViewerCount(msg.text); break;
-    case 'error':        console.error(msg.message); break;
+    case 'joined':
+      handleJoined(msg.room_state);
+      break;
+    case 'media':
+      handleMedia(msg.media_url);
+      break;
+    case 'state':
+      handleStateUpdate(msg.play_state);
+      break;
+    case 'sync':
+      handleSync(msg.play_state);
+      break;
+    case 'subtitle':
+      initSubtitle(msg.from, msg.text);
+      break;
+    case 'system':
+      updateViewerCount(msg.text);
+      break;
   }
-}
-
-// ====== WebRTC ======
-async function handleOffer(sdp) {
-  try {
-    if (pc) { pc.close(); pc = null; }
-    const servers = iceServers && iceServers.length ? iceServers : [{ urls: 'stun:stun.l.google.com:19302' }];
-    pc = new RTCPeerConnection({ iceServers: servers });
-
-    pc.ontrack = (event) => {
-      console.log('[SyncWatch] Track received:', event.track.kind);
-      dbg('Track', event.track.kind);
-      if (event.track.kind === 'video') {
-        $('#main-video').srcObject = event.streams[0];
-        $('#main-video').play().catch(e => console.warn('[SyncWatch] video.play failed:', e));
-        hideVideoStatus();
-      }
-    };
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'ice-candidate', candidate: event.candidate.candidate,
-          sdp_mid: event.candidate.sdpMid, sdp_mline_index: event.candidate.sdpMLineIndex }));
-      }
-    };
-
-    pc.oniceconnectionstatechange = () => {
-      dbg('ICE', pc.iceConnectionState);
-      store.set('connection.iceState', pc.iceConnectionState);
-      updateConnectionUI();
-    };
-
-    pc.ondatachannel = (event) => {
-      if (event.channel.label === 'sync') {
-        event.channel.onmessage = (e) => {
-          const m = JSON.parse(e.data);
-          if (m.type === 'position') store.set('playback.position', m.t);
-          else if (m.type === 'pause' || m.type === 'resume' || m.type === 'seek') {
-            store.set('playback.position', m.position);
-            store.set('playback.state', m.type === 'pause' ? 'paused' : 'playing');
-            updatePlayerUI();
-          }
-        };
-      }
-    };
-
-    await pc.setRemoteDescription({ type: 'offer', sdp });
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'answer', sdp: answer.sdp }));
-    }
-  } catch (err) { dbg('Error', err.message || String(err)); }
-}
-
-async function handleICECandidate(msg) {
-  try {
-    if (pc && msg.candidate) await pc.addIceCandidate({ candidate: msg.candidate, sdpMid: msg.sdp_mid, sdpMLineIndex: msg.sdp_mline_index });
-  } catch (e) {}
 }
 
 function handleJoined(rs) {
@@ -180,67 +119,162 @@ function handleJoined(rs) {
   store.set('playback', { state: rs.state, position: rs.position || 0, duration: rs.media?.duration || 0, speed: rs.speed || 1.0 });
   if (rs.media) store.set('media.filename', rs.media.filename);
   if (rs.subtitle?.content) initSubtitle(rs.subtitle.format, rs.subtitle.content);
-  if (rs.ice_servers) iceServers = rs.ice_servers;
   if (rs.audio_tracks) {
     const sel = $('#audio-select');
     sel.innerHTML = rs.audio_tracks.map((t, i) => `<option value="${i}">${t.language || t.title || 'Track '+(i+1)}</option>`).join('');
     sel.classList.toggle('hidden', rs.audio_tracks.length <= 1);
     sel.value = rs.selected_audio || 0;
   }
-  if (rs.subtitle_tracks && rs.subtitle_tracks.length > 0) {
+  if (rs.subtitle_tracks?.length) {
     const sel = $('#subtitle-select');
-    sel.innerHTML = `<option value="-1">关闭</option>` + rs.subtitle_tracks.map((t, i) => `<option value="${i}">${t.language || t.title || 'Subtitle '+(i+1)}</option>`).join('');
+    sel.innerHTML = `<option value="-1">关闭</option>` + rs.subtitle_tracks.map((t, i) => `<option value="${i}">${t.title || 'Sub '+(i+1)}</option>`).join('');
     sel.classList.toggle('hidden', false);
     sel.value = rs.selected_sub !== undefined ? String(rs.selected_sub) : '-1';
   }
   updatePlayerUI();
 }
 
+function handleMedia(url) {
+  if (!url) return;
+  console.log('[SyncWatch] Loading media:', url);
+  store.set('playback.mediaURL', url);
+  loadVideo(url);
+}
+
 function handleStateUpdate(ps) {
   if (!ps) return;
+  const role = store.get('role');
+
+  // Viewer: sync to host's state
+  if (role === 'viewer') {
+    const video = $('#main-video');
+    if (ps.playing) {
+      if (video.paused) {
+        if (Math.abs(video.currentTime - ps.position) > 2) {
+          video.currentTime = ps.position;
+        }
+        video.play().catch(() => {});
+      }
+    } else {
+      video.pause();
+    }
+    if (ps.speed && video.playbackRate !== ps.speed) {
+      video.playbackRate = ps.speed;
+    }
+  }
+
   store.set('playback.state', ps.playing ? 'playing' : 'paused');
   store.set('playback.position', ps.position);
   store.set('playback.speed', ps.speed || 1.0);
   updatePlayerUI();
 }
 
+function handleSync(ps) {
+  if (!ps) return;
+  const video = $('#main-video');
+  if (Math.abs(video.currentTime - ps.position) > 0.5) {
+    video.currentTime = ps.position;
+  }
+  if (ps.playing && video.paused) video.play().catch(() => {});
+  else if (!ps.playing && !video.paused) video.pause();
+  store.set('playback.position', ps.position);
+  updatePlayerUI();
+}
+
+// ====== Video Player ======
+function loadVideo(url) {
+  const video = $('#main-video');
+  $('#video-status').classList.remove('hidden');
+  $('#status-text').textContent = '加载中...';
+
+  // Destroy previous HLS instance
+  if (hls) { hls.destroy(); hls = null; }
+
+  const isM3U8 = url.match(/\.m3u8(\?.*)?$/i);
+
+  if (isM3U8 && Hls.isSupported()) {
+    hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      $('#video-status').classList.add('hidden');
+      store.set('playback.duration', hls.levels[0]?.details?.totalduration || video.duration || 0);
+      updatePlayerUI();
+      video.play().catch(() => {});
+    });
+    hls.on(Hls.Events.ERROR, (evt, data) => {
+      if (data.fatal) {
+        console.error('[SyncWatch] HLS error:', data.type, data.details);
+        $('#status-text').textContent = `HLS 错误: ${data.details}`;
+      }
+    });
+  } else {
+    // Direct play (mp4, webm, etc.)
+    video.src = url;
+    video.load();
+    video.onloadedmetadata = () => {
+      $('#video-status').classList.add('hidden');
+      store.set('playback.duration', video.duration || 0);
+      updatePlayerUI();
+    };
+    video.oncanplay = () => {
+      $('#video-status').classList.add('hidden');
+      video.play().catch(() => {});
+    };
+    video.onerror = () => {
+      $('#status-text').textContent = `加载失败: ${video.error?.message || '未知错误'}`;
+    };
+  }
+}
+
 // ====== Subtitle ======
 async function initSubtitle(format, content) {
-  if (subRenderer) { try { subRenderer.destroy(); } catch(e) {} subRenderer = null; }
+  // Destroy previous renderer
+  const canvas = $('#subtitle-canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!content) return;
+
   try {
-    const video = $('#main-video'), canvas = $('#subtitle-canvas');
+    const JASSUB = (await import('jassub')).default;
+    const video = $('#main-video');
     canvas.width = video.clientWidth || 1280;
     canvas.height = video.clientHeight || 720;
-    subRenderer = new JASSUB({
+    const jassub = new JASSUB({
       video, canvas, subContent: content,
       workerUrl: '/jassub/jassub-worker.js',
       modernWasmUrl: '/jassub/jassub-worker-modern.wasm',
       prescaleFactor: 0.5, blendMode: 'js', asyncRender: true, targetFps: 30,
     });
-  } catch (err) { console.error('[Sub]', err); }
+    // Store for cleanup (simplified — just use module scope)
+    window._jassub = jassub;
+  } catch (err) { console.error('[SyncWatch] Subtitle init failed:', err); }
 }
 
 // ====== Host Controls ======
 $('#btn-play-pause').addEventListener('click', async () => {
-  try { store.get('playback.state') === 'playing' ? await api.pause() : await api.resume(); } catch(e) {}
+  try {
+    const playing = store.get('playback.state') === 'playing';
+    if (playing) await api.pause();
+    else await api.resume();
+  } catch (e) { console.error(e); }
 });
 
 $('#seek-bar').addEventListener('input', async (e) => {
   const d = store.get('playback.duration'); if (!d) return;
-  try { await api.seek((e.target.value / 100) * d); } catch(e) {}
+  try { await api.seek((e.target.value / 100) * d); } catch (e) {}
 });
 
 $('#speed-select').addEventListener('change', async (e) => {
-  try { await api.speed(parseFloat(e.target.value)); } catch(e) {}
+  try { await api.speed(parseFloat(e.target.value)); } catch (e) {}
 });
 
 $('#audio-select').addEventListener('change', async (e) => {
-  try { await api.audioTrack(parseInt(e.target.value)); } catch(e) {}
+  try { await api.audioTrack(parseInt(e.target.value)); } catch (e) {}
 });
 
 $('#subtitle-select').addEventListener('change', async (e) => {
-  try { await api.subtitle(parseInt(e.target.value)); } catch(e) {}
+  try { await api.subtitle(parseInt(e.target.value)); } catch (e) {}
 });
 
 $('#btn-force-sync').addEventListener('click', async () => {
@@ -250,11 +284,7 @@ $('#btn-force-sync').addEventListener('click', async () => {
     store.set('playback.position', s.position || 0);
     store.set('playback.speed', s.speed || 1.0);
     updatePlayerUI();
-  } catch(e) {}
-});
-
-$('#btn-web-fullscreen').addEventListener('click', () => {
-  document.getElementById('player-screen').classList.toggle('web-fullscreen');
+  } catch (e) {}
 });
 
 $('#btn-fullscreen').addEventListener('click', () => {
@@ -262,18 +292,36 @@ $('#btn-fullscreen').addEventListener('click', () => {
   document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
 });
 
-document.addEventListener('fullscreenchange', () => {
-  $('#main-video').style.objectFit = document.fullscreenElement ? 'contain' : '';
-});
-
 // File/URL
 $('#btn-open-file').addEventListener('click', () => {
   const path = prompt('输入媒体文件路径:');
   if (path) loadMedia(path);
 });
+
 $('#btn-load-url').addEventListener('click', () => {
   const url = $('#url-input').value.trim();
   if (url) loadMedia(url);
+});
+
+// File upload
+$('#btn-upload-file')?.addEventListener('click', () => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'video/*';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    $('#video-status').classList.remove('hidden');
+    $('#status-text').textContent = '上传中...';
+    try {
+      const result = await api.upload(file);
+      $('#status-text').textContent = '上传完成，加载中...';
+      loadVideo(result.url);
+    } catch (e) {
+      $('#status-text').textContent = `上传失败: ${e.message}`;
+    }
+  };
+  input.click();
 });
 
 async function loadMedia(path) {
@@ -281,21 +329,14 @@ async function loadMedia(path) {
     $('#video-status').classList.remove('hidden');
     $('#status-text').textContent = '加载中...';
     const result = await api.play(path);
-    if (result.status === 'loading') {
-      $('#status-text').textContent = '正在初始化流媒体...';
-      for (let i = 0; i < 60; i++) {
-        await new Promise(r => setTimeout(r, 1000));
-        try {
-          const s = await api.state();
-          dbg('Poll', s.state);
-          if (s.state === 'playing') { $('#video-status').classList.add('hidden'); updatePlayerUI(); return; }
-        } catch(e) { dbg('PollErr', e.message); }
-      }
-      $('#status-text').textContent = '启动超时';
+    if (result.url) {
+      loadVideo(result.url);
     } else {
-      $('#video-status').classList.add('hidden');
+      $('#status-text').textContent = '错误: 未能获取播放地址';
     }
-  } catch (err) { $('#status-text').textContent = `错误: ${err.message}`; }
+  } catch (err) {
+    $('#status-text').textContent = `错误: ${err.message}`;
+  }
 }
 
 // ====== Viewer Overlay ======
@@ -316,9 +357,11 @@ function updateConnectionUI() {
 
 function updatePlayerUI() {
   const p = store.get('playback'), d = p.duration || 0;
-  const bar = $('#seek-bar'); if (bar && d > 0) { bar.max = 100; bar.value = (p.position / d) * 100; }
+  const bar = $('#seek-bar');
+  if (bar && d > 0) { bar.max = 100; bar.value = p.position > 0 ? (p.position / d) * 100 : 0; }
   const td = $('#time-display'); if (td) td.textContent = `${fmt(p.position)} / ${fmt(d)}`;
-  const vp = $('#viewer-position'); if (vp && d > 0) vp.style.width = `${(p.position / d) * 100}%`;
+  const vp = $('#viewer-position');
+  if (vp && d > 0) vp.style.width = `${(p.position / d) * 100}%`;
   const vt = $('#viewer-time'); if (vt) vt.textContent = `${fmt(p.position)} / ${fmt(d)}`;
   const btn = $('#btn-play-pause');
   if (btn) btn.innerHTML = p.state === 'playing'
@@ -326,39 +369,36 @@ function updatePlayerUI() {
     : '<svg width="24" height="24" viewBox="0 0 24 24"><polygon points="8,5 19,12 8,19" fill="currentColor"/></svg>';
 }
 
-
-function hideVideoStatus() { $('#video-status').classList.add('hidden'); }
-
 function updateViewerCount(text) {
   const el = $('#viewer-count');
-  if (el) { el.textContent = text; setTimeout(refreshViewerCount, 3000); }
+  if (el) { el.textContent = text; setInterval(refreshViewerCount, 10000); }
 }
-
 async function refreshViewerCount() {
   try {
     const s = await api.status();
-    store.set('viewers', s.viewers || 0);
     $('#viewer-count').textContent = `${s.viewers || 0} 人在线`;
-  } catch(e) {
-    $('#viewer-count').textContent = '0 人在线';
-  }
+  } catch (e) {}
 }
 
 // ====== Admin ======
 async function updateAdmin() {
-  if (!store.get('token')) return; // skip if not logged in
+  if (!store.get('token')) return;
   try {
     const s = await api.status();
     $('#admin-viewers').textContent = s.viewers || 0;
     $('#admin-state').textContent = s.state || '空闲';
-    $('#admin-media').textContent = s.media?.filename || '无';
+    $('#admin-media').textContent = s.media_url || '无';
     $('#admin-transcode').textContent = s.state || '空闲';
-  } catch(e) {}
+  } catch (e) {}
 }
 
 // ====== Utils ======
-function fmt(s) { if (!s || isNaN(s)) return '00:00'; const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60); return h>0?`${p(h)}:${p(m)}:${p(sec)}`:`${p(m)}:${p(sec)}`; }
-function p(n) { return String(n).padStart(2,'0'); }
+function fmt(s) {
+  if (!s || isNaN(s)) return '00:00';
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
+  return h > 0 ? `${p(h)}:${p(m)}:${p(sec)}` : `${p(m)}:${p(sec)}`;
+}
+function p(n) { return String(n).padStart(2, '0'); }
 
 // ====== Keyboard ======
 document.addEventListener('keydown', (e) => {
@@ -371,7 +411,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 async function seekRelative(d) {
-  try { await api.seek(Math.max(0, store.get('playback.position') + d)); } catch(e) {}
+  try { await api.seek(Math.max(0, store.get('playback.position') + d)); } catch (e) {}
 }
 
 // ====== Init ======

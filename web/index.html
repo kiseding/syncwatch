@@ -40,10 +40,6 @@
           <div class="spinner"></div>
           <p id="status-text">加载中...</p>
         </div>
-        <!-- Debug panel -->
-        <div id="debug-panel" style="position:absolute;top:0;left:0;z-index:999;background:rgba(0,0,0,0.8);color:#0f0;font:12px monospace;padding:8px;max-width:300px;pointer-events:none">
-          WS: --<br>ICE: --<br>Track: --<br>Error: --
-        </div>
         <!-- Viewer click overlay -->
         <div id="viewer-overlay" class="viewer-overlay">
           <div class="viewer-progress"><div id="viewer-position"></div></div>
@@ -69,11 +65,11 @@
           <select id="audio-select" title="音轨" class="hidden"></select>
           <select id="subtitle-select" title="字幕" class="hidden"></select>
           <button id="btn-force-sync" title="强制同步">🔄</button>
-          <button id="btn-web-fullscreen" title="网页全屏">⛶</button>
-          <button id="btn-fullscreen" title="真全屏">⛶</button>
+          <button id="btn-fullscreen" title="全屏">⛶</button>
         </div>
         <div class="host-tools">
-          <button id="btn-open-file">选择影片</button>
+          <button id="btn-open-file">本地文件</button>
+          <button id="btn-upload-file">上传文件</button>
           <input type="text" id="url-input" placeholder="或输入视频URL...">
           <button id="btn-load-url">加载</button>
         </div>
@@ -116,7 +112,7 @@
           </div>
           <div class="stat-card">
             <span class="stat-label">转码状态</span>
-            <span class="stat-value" id="admin-transcode">空闲</span>
+            <span class="stat-value" id="admin-transcode">闲置</span>
           </div>
         </div>
         <button onclick="navigate('player')">返回播放器</button>
@@ -124,6 +120,7 @@
     </div>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
   <script type="module" src="/js/main.js"></script>
 </body>
 </html>
