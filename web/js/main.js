@@ -59,6 +59,7 @@ function enterHost() {
   navigate('player');
   $('#host-controls').classList.remove('hidden');
   $('#viewer-overlay').classList.add('hidden');
+  $('#status-bar').style.display = 'none';
   connectWebSocket();
 }
 
