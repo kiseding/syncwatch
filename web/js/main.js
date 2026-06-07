@@ -5,7 +5,7 @@ import Hls from 'hls.js';
 
 const $ = (sel) => document.querySelector(sel);
 
-let ws = null, hls = null;
+let ws = null, hls = null, syncTimer = null;
 
 // ====== Navigation ======
 window.navigate = function (screen) {
@@ -62,6 +62,21 @@ function enterHost() {
   $('#host-controls').classList.remove('hidden');
   $('#viewer-overlay').classList.add('hidden');
   connectWebSocket();
+  startHostSync();
+}
+
+function startHostSync() {
+  stopHostSync();
+  syncTimer = setInterval(() => {
+    if (store.get('role') !== 'host') return;
+    const video = $('#main-video');
+    if (!video || !video.duration || video.paused) return;
+    api.sync(video.currentTime).catch(() => {});
+  }, 5000);
+}
+
+function stopHostSync() {
+  if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
 }
 
 // ====== WebSocket ======
@@ -73,11 +88,18 @@ function connectWebSocket() {
   const url = `${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`;
   console.log('[SyncWatch] WS connect');
   ws = new WebSocket(url);
+  let wasOpen = false;
 
-  ws.onopen = () => console.log('[SyncWatch] WS open');
+  ws.onopen = () => { console.log('[SyncWatch] WS open'); wasOpen = true; };
   ws.onmessage = (e) => handleWSMessage(JSON.parse(e.data));
   ws.onclose = (ev) => {
     console.warn('[SyncWatch] WS close', ev.code);
+    if (!wasOpen) {
+      stopHostSync();
+      store.logout();
+      navigate('login');
+      return;
+    }
     setTimeout(connectWebSocket, 1000);
   };
   ws.onerror = () => console.error('[SyncWatch] WS error');
@@ -194,13 +216,16 @@ function loadVideo(url) {
   // Remove old timeupdate handler
   video.ontimeupdate = null;
 
-  // Update progress bar in real-time for host
-  if (store.get('role') === 'host') {
-    video.ontimeupdate = () => {
-      store.set('playback.position', video.currentTime);
-      updatePlayerUI();
-    };
-  }
+  // Update progress bar in real-time
+  video.ontimeupdate = () => {
+    store.set('playback.position', video.currentTime);
+    updatePlayerUI();
+  };
+
+  // Show loading when video buffers
+  video.onwaiting = () => { $('#video-status').classList.remove('hidden'); $('#status-text').textContent = '缓冲中...'; };
+  video.onplaying = () => { $('#video-status').classList.add('hidden'); };
+  video.oncanplay = () => { $('#video-status').classList.add('hidden'); };
 
   const isM3U8 = url.match(/\.m3u8(\?.*)?$/i);
 
@@ -247,10 +272,18 @@ function loadVideo(url) {
 
 // ====== Subtitle ======
 async function initSubtitle(format, content) {
-  // Destroy previous renderer
   const canvas = $('#subtitle-canvas');
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Destroy previous renderer to free WASM/worker memory
+  if (window._jassub) {
+    window._jassub.destroy();
+    window._jassub = null;
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+
   if (!content) return;
 
   try {
@@ -264,9 +297,17 @@ async function initSubtitle(format, content) {
       modernWasmUrl: '/jassub/jassub-worker-modern.wasm',
       prescaleFactor: 0.5, blendMode: 'js', asyncRender: true, targetFps: 30,
     });
-    // Store for cleanup (simplified — just use module scope)
     window._jassub = jassub;
   } catch (err) { console.error('[SyncWatch] Subtitle init failed:', err); }
+}
+
+function resizeSubtitle() {
+  if (!window._jassub) return;
+  const canvas = $('#subtitle-canvas');
+  const video = $('#main-video');
+  canvas.width = video.clientWidth || 1280;
+  canvas.height = video.clientHeight || 720;
+  window._jassub.resize();
 }
 
 // ====== Host Controls ======
@@ -288,16 +329,15 @@ $('#btn-play-pause').addEventListener('click', async () => {
   } catch (e) { console.error(e); }
 });
 
-$('#seek-bar').addEventListener('input', async (e) => {
+$('#seek-bar').addEventListener('input', (e) => {
   const d = store.get('playback.duration'); if (!d) return;
   const pos = (e.target.value / 100) * d;
-  // Host: seek video immediately, then broadcast to viewers
   if (store.get('role') === 'host') {
     $('#main-video').currentTime = pos;
     store.set('playback.position', pos);
     updatePlayerUI();
   }
-  try { await api.seek(pos); } catch (e) {}
+  debounce('seek', () => api.seek(pos).catch(() => {}), 200);
 });
 
 $('#speed-select').addEventListener('change', async (e) => {
@@ -460,6 +500,11 @@ async function updateAdmin() {
 }
 
 // ====== Utils ======
+const _debounceTimers = {};
+function debounce(key, fn, ms) {
+  clearTimeout(_debounceTimers[key]);
+  _debounceTimers[key] = setTimeout(fn, ms);
+}
 function fmt(s) {
   if (!s || isNaN(s)) return '00:00';
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = Math.floor(s % 60);
@@ -495,5 +540,7 @@ async function seekRelative(d) {
   } else {
     navigate('login');
   }
-  setInterval(() => { if (store.get('screen') === 'admin') updateAdmin(); }, 3000);
+  window.addEventListener('resize', resizeSubtitle);
+  document.addEventListener('fullscreenchange', () => setTimeout(resizeSubtitle, 200));
+  setInterval(() => { if (store.get('screen') === 'admin') updateAdmin(); }, 30000);
 })();

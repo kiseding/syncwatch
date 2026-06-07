@@ -23,6 +23,7 @@ export const api = {
   resume: () => request('POST', '/api/playback/resume'),
   seek: (position) => request('POST', '/api/playback/seek', { position }),
   speed: (speed) => request('POST', '/api/playback/speed', { speed }),
+  sync: (position) => request('POST', '/api/playback/sync', { position }),
   audioTrack: (index) => request('POST', '/api/playback/audio', { index }),
   subtitle: (index) => request('POST', '/api/playback/subtitle', { index }),
 

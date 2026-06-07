@@ -56,7 +56,10 @@ func main() {
 		cfg.Auth.AdminPasswordHash = hash
 	}
 	if cfg.Auth.PasswordHash == "" {
-		defaultHash, _ := auth.HashPassword("syncwatch")
+		defaultHash, err := auth.HashPassword("syncwatch")
+		if err != nil {
+			logger.Fatal().Err(err).Msg("failed to generate default password hash")
+		}
 		logger.Info().Str("hash", defaultHash).Msg("no password set, using default: syncwatch")
 		cfg.Auth.PasswordHash = defaultHash
 	}
@@ -99,6 +102,7 @@ func main() {
 	mux.Handle("POST /api/playback/resume", apiRouter.HostOnly(handler.Resume))
 	mux.Handle("POST /api/playback/seek", apiRouter.HostOnly(handler.Seek))
 	mux.Handle("POST /api/playback/speed", apiRouter.HostOnly(handler.SetSpeed))
+	mux.Handle("POST /api/playback/sync", apiRouter.HostOnly(handler.SyncPosition))
 	mux.Handle("POST /api/playback/audio", apiRouter.HostOnly(handler.SwitchAudio))
 	mux.Handle("POST /api/playback/subtitle", apiRouter.HostOnly(handler.SwitchSubtitle))
 	mux.Handle("POST /api/upload", apiRouter.HostOnly(handler.Upload))
@@ -186,13 +190,17 @@ func setupWebSocket(mux *http.ServeMux, tm *auth.TokenManager,
 			logger.Debug().Str("viewer", c.ID).Str("type", msg.Type).Msg("ws msg")
 		}
 
-		hub.SendSystem(fmt.Sprintf("%s 加入了房间", viewerID))
+		displayName := viewerID
+		if claims.Role == "host" {
+			displayName = "Host"
+		}
+		hub.SendSystem(fmt.Sprintf("%s 加入了房间", displayName))
 
 		// Cleanup on disconnect
 		defer func() {
-			hub.SendSystem(fmt.Sprintf("%s 离开了房间", viewerID))
+			hub.SendSystem(fmt.Sprintf("%s 离开了房间", displayName))
 		}()
-		select {}
+		<-client.Done
 	})
 }
 

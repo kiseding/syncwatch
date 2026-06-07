@@ -82,6 +82,7 @@ type Client struct {
 	Role      string // "host" or "viewer"
 	Conn      *websocket.Conn
 	Send      chan []byte
+	Done      chan struct{}
 	hub       *Hub
 	mu        sync.Mutex
 	OnMessage func(client *Client, msg Message) // per-client message handler
@@ -111,6 +112,7 @@ func (h *Hub) Register(id, role string, conn *websocket.Conn) *Client {
 		Role: role,
 		Conn: conn,
 		Send: make(chan []byte, 64),
+		Done: make(chan struct{}),
 		hub:  h,
 	}
 
@@ -228,7 +230,10 @@ func (c *Client) writePump() {
 
 // readPump reads messages from the WebSocket connection.
 func (c *Client) readPump() {
-	defer c.hub.Unregister(c.ID)
+	defer func() {
+		close(c.Done)
+		c.hub.Unregister(c.ID)
+	}()
 
 	c.Conn.SetReadLimit(65536)
 	c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))

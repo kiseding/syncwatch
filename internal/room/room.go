@@ -175,6 +175,23 @@ func (r *Room) Seek(position float64) {
 	})
 }
 
+// SyncPosition updates the playback position without changing state.
+// Used for periodic position sync from host to keep viewers in sync.
+func (r *Room) SyncPosition(position float64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.position = position
+
+	r.hub.Broadcast(signaling.Message{
+		Type: signaling.MsgSync,
+		PlayState: &signaling.PlaybackState{
+			Playing:  r.state == StatePlaying,
+			Position: position,
+			Speed:    r.speed,
+		},
+	})
+}
+
 // SetSpeed changes playback speed.
 func (r *Room) SetSpeed(speed float64) {
 	r.mu.Lock()

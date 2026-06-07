@@ -88,15 +88,6 @@ func RateLimitMiddleware(rl *auth.RateLimiter, limitPerMin int) func(http.Handle
 	}
 }
 
-// isLocalhost checks if the request originates from localhost.
-func isLocalhost(r *http.Request) bool {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	return host == "127.0.0.1" || host == "::1" || host == "localhost"
-}
-
 // getClientIP extracts the client IP from the request, handling proxies.
 func getClientIP(r *http.Request) string {
 	// Check X-Forwarded-For header

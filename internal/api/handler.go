@@ -131,6 +131,19 @@ func (h *Handler) SetSpeed(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"speed": req.Speed})
 }
 
+// SyncPosition updates playback position from host's periodic sync.
+func (h *Handler) SyncPosition(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Position float64 `json:"position"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	h.Room.SyncPosition(req.Position)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // SwitchAudio switches audio track.
 func (h *Handler) SwitchAudio(w http.ResponseWriter, r *http.Request) {
 	var req struct {
