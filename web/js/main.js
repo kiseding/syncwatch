@@ -50,7 +50,9 @@ $('#admin-login-form')?.addEventListener('submit', async (e) => {
 function enterViewer() {
   navigate('player');
   $('#host-controls').classList.add('hidden');
+  $('#video-status').classList.add('hidden');
   $('#viewer-overlay').classList.remove('hidden');
+  $('#status-bar').style.display = 'none';
   connectWebSocket();
 }
 
@@ -58,6 +60,7 @@ function enterHost() {
   navigate('player');
   $('#host-controls').classList.remove('hidden');
   $('#viewer-overlay').classList.add('hidden');
+  $('#status-bar').style.display = 'flex';
   connectWebSocket();
 }
 
@@ -255,8 +258,18 @@ async function initSubtitle(format, content) {
 $('#btn-play-pause').addEventListener('click', async () => {
   try {
     const playing = store.get('playback.state') === 'playing';
-    if (playing) await api.pause();
-    else await api.resume();
+    const video = $('#main-video');
+    // Optimistic update
+    if (playing) {
+      video.pause();
+      store.set('playback.state', 'paused');
+      await api.pause();
+    } else {
+      video.play().catch(() => {});
+      store.set('playback.state', 'playing');
+      await api.resume();
+    }
+    updatePlayerUI();
   } catch (e) { console.error(e); }
 });
 
@@ -357,11 +370,16 @@ function updateConnectionUI() {
 
 function updatePlayerUI() {
   const p = store.get('playback'), d = p.duration || 0;
+  const pct = d > 0 ? Math.min(100, (p.position / d) * 100) : 0;
   const bar = $('#seek-bar');
-  if (bar && d > 0) { bar.max = 100; bar.value = p.position > 0 ? (p.position / d) * 100 : 0; }
+  if (bar && d > 0) {
+    bar.max = 100;
+    bar.value = pct;
+    bar.style.background = `linear-gradient(to right, var(--accent) 0%, var(--accent) ${pct}%, var(--bg-tertiary) ${pct}%, var(--bg-tertiary) 100%)`;
+  }
   const td = $('#time-display'); if (td) td.textContent = `${fmt(p.position)} / ${fmt(d)}`;
   const vp = $('#viewer-position');
-  if (vp && d > 0) vp.style.width = `${(p.position / d) * 100}%`;
+  if (vp && d > 0) vp.style.width = `${pct}%`;
   const vt = $('#viewer-time'); if (vt) vt.textContent = `${fmt(p.position)} / ${fmt(d)}`;
   const btn = $('#btn-play-pause');
   if (btn) btn.innerHTML = p.state === 'playing'
@@ -370,14 +388,7 @@ function updatePlayerUI() {
 }
 
 function updateViewerCount(text) {
-  const el = $('#viewer-count');
-  if (el) { el.textContent = text; setInterval(refreshViewerCount, 10000); }
-}
-async function refreshViewerCount() {
-  try {
-    const s = await api.status();
-    $('#viewer-count').textContent = `${s.viewers || 0} 人在线`;
-  } catch (e) {}
+  // System messages only — viewer count not displayed
 }
 
 // ====== Admin ======
