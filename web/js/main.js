@@ -174,6 +174,12 @@ function handleStateUpdate(ps) {
 
 function handleSync(ps) {
   if (!ps) return;
+  // Host controls playback, only viewers sync to server
+  if (store.get('role') === 'host') {
+    store.set('playback.position', ps.position);
+    updatePlayerUI();
+    return;
+  }
   const video = $('#main-video');
   if (Math.abs(video.currentTime - ps.position) > 0.5) {
     video.currentTime = ps.position;
@@ -192,6 +198,17 @@ function loadVideo(url) {
 
   // Destroy previous HLS instance
   if (hls) { hls.destroy(); hls = null; }
+
+  // Remove old timeupdate handler
+  video.ontimeupdate = null;
+
+  // Update progress bar in real-time for host
+  if (store.get('role') === 'host') {
+    video.ontimeupdate = () => {
+      store.set('playback.position', video.currentTime);
+      updatePlayerUI();
+    };
+  }
 
   const isM3U8 = url.match(/\.m3u8(\?.*)?$/i);
 
