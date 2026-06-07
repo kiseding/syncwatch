@@ -113,15 +113,16 @@ func (r *Room) SetMedia(path string, sourceType SourceType) {
 	r.broadcastState()
 }
 
-// SetMediaInfo stores ffprobe metadata.
+// SetMediaInfo stores ffprobe metadata and broadcasts updated track info.
 func (r *Room) SetMediaInfo(info *media.MediaInfo, audioTracks []media.TrackInfo) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.mediaInfo = info
 	r.audioTracks = audioTracks
+	r.broadcastRoomInfo()
 }
 
-// SetSubtitles stores detected subtitles.
+// SetSubtitles stores detected subtitles and broadcasts updated info.
 func (r *Room) SetSubtitles(subs []media.SubtitleInfo) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -131,6 +132,7 @@ func (r *Room) SetSubtitles(subs []media.SubtitleInfo) {
 			r.subFormat, r.subContent, r.subIndex = fmt, cnt, 0
 		}
 	}
+	r.broadcastRoomInfo()
 }
 
 // Pause pauses playback.
@@ -325,6 +327,38 @@ func (r *Room) broadcastState() {
 			Playing:  r.state == StatePlaying,
 			Position: r.position,
 			Speed:    r.speed,
+		},
+	})
+}
+
+// broadcastRoomInfo sends updated audio/subtitle track info to all clients.
+func (r *Room) broadcastRoomInfo() {
+	var audioTracks []signaling.TrackInfo
+	for _, t := range r.audioTracks {
+		audioTracks = append(audioTracks, signaling.TrackInfo{
+			Index: t.Index, Type: "audio",
+			Language: t.Language, Title: t.Title,
+		})
+	}
+	var subTracks []signaling.TrackInfo
+	for _, s := range r.subs {
+		subTracks = append(subTracks, signaling.TrackInfo{
+			Index: s.Index, Type: "subtitle",
+			Language: s.Language, Title: s.Path,
+		})
+	}
+	dur := 0.0
+	if r.mediaInfo != nil {
+		dur = r.mediaInfo.Duration
+	}
+	r.hub.Broadcast(signaling.Message{
+		Type: signaling.MsgJoined,
+		RoomState: &signaling.RoomState{
+			Media:         &signaling.MediaState{Filename: r.mediaURL, Duration: dur},
+			AudioTracks:   audioTracks,
+			SubTracks:     subTracks,
+			SelectedAudio: r.audioIndex,
+			SelectedSub:   r.subIndex,
 		},
 	})
 }

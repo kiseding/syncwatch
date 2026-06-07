@@ -52,7 +52,6 @@ function enterViewer() {
   $('#host-controls').classList.add('hidden');
   $('#video-status').classList.add('hidden');
   $('#viewer-overlay').classList.remove('hidden');
-  $('#status-bar').style.display = 'none';
   connectWebSocket();
 }
 
@@ -60,7 +59,6 @@ function enterHost() {
   navigate('player');
   $('#host-controls').classList.remove('hidden');
   $('#viewer-overlay').classList.add('hidden');
-  $('#status-bar').style.display = 'flex';
   connectWebSocket();
 }
 
@@ -119,8 +117,12 @@ function handleWSMessage(msg) {
 
 function handleJoined(rs) {
   if (!rs) return;
-  store.set('playback', { state: rs.state, position: rs.position || 0, duration: rs.media?.duration || 0, speed: rs.speed || 1.0 });
-  if (rs.media) store.set('media.filename', rs.media.filename);
+  // Only overwrite fields that are present (partial updates via broadcastRoomInfo)
+  if (rs.state !== undefined) store.set('playback.state', rs.state);
+  if (rs.position !== undefined) store.set('playback.position', rs.position);
+  if (rs.media?.duration) store.set('playback.duration', rs.media.duration);
+  if (rs.speed) store.set('playback.speed', rs.speed);
+  if (rs.media?.filename) store.set('media.filename', rs.media.filename);
   if (rs.subtitle?.content) initSubtitle(rs.subtitle.format, rs.subtitle.content);
   if (rs.audio_tracks) {
     const sel = $('#audio-select');
@@ -310,11 +312,26 @@ $('#subtitle-select').addEventListener('change', async (e) => {
 $('#btn-force-sync').addEventListener('click', async () => {
   try {
     const s = await api.state();
+    const video = $('#main-video');
+    const role = store.get('role');
+
+    // Sync video position to server state
+    if (s.position > 0 && Math.abs(video.currentTime - s.position) > 0.3) {
+      video.currentTime = s.position;
+    }
+    if (s.state === 'playing' && video.paused) {
+      video.play().catch(() => {});
+    } else if (s.state === 'paused' && !video.paused) {
+      video.pause();
+    }
+    if (s.speed && video.playbackRate !== s.speed) {
+      video.playbackRate = s.speed;
+    }
     store.set('playback.state', s.state === 'playing' ? 'playing' : 'paused');
     store.set('playback.position', s.position || 0);
     store.set('playback.speed', s.speed || 1.0);
     updatePlayerUI();
-  } catch (e) {}
+  } catch (e) { console.error(e); }
 });
 
 $('#btn-fullscreen').addEventListener('click', () => {
