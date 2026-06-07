@@ -52,6 +52,8 @@ function enterViewer() {
   $('#host-controls').classList.add('hidden');
   $('#video-status').classList.add('hidden');
   $('#viewer-overlay').classList.remove('hidden');
+  // Show overlay controls by default (progress bar + time)
+  $('#viewer-overlay').classList.add('active');
   connectWebSocket();
 }
 
@@ -203,7 +205,13 @@ function loadVideo(url) {
   const isM3U8 = url.match(/\.m3u8(\?.*)?$/i);
 
   if (isM3U8 && Hls.isSupported()) {
-    hls = new Hls({ enableWorker: true, lowLatencyMode: false });
+    hls = new Hls({
+      enableWorker: true,
+      lowLatencyMode: false,
+      maxBufferLength: 90,
+      maxMaxBufferLength: 120,
+      maxBufferSize: 100 * 1000 * 1000, // 100MB
+    });
     hls.loadSource(url);
     hls.attachMedia(video);
     hls.on(Hls.Events.MANIFEST_PARSED, () => {
@@ -282,7 +290,14 @@ $('#btn-play-pause').addEventListener('click', async () => {
 
 $('#seek-bar').addEventListener('input', async (e) => {
   const d = store.get('playback.duration'); if (!d) return;
-  try { await api.seek((e.target.value / 100) * d); } catch (e) {}
+  const pos = (e.target.value / 100) * d;
+  // Host: seek video immediately, then broadcast to viewers
+  if (store.get('role') === 'host') {
+    $('#main-video').currentTime = pos;
+    store.set('playback.position', pos);
+    updatePlayerUI();
+  }
+  try { await api.seek(pos); } catch (e) {}
 });
 
 $('#speed-select').addEventListener('change', async (e) => {
@@ -362,6 +377,33 @@ $('#btn-upload-file')?.addEventListener('click', () => {
   input.click();
 });
 
+// Subtitle upload
+$('#btn-upload-sub')?.addEventListener('click', () => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.srt,.ass,.ssa,.vtt';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const token = store.get('token');
+      const res = await fetch('/api/upload/subtitle', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+        body: form
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      console.log('[SyncWatch] Subtitle loaded:', data.format);
+    } catch (e) {
+      console.error('Subtitle upload failed:', e);
+    }
+  };
+  input.click();
+});
+
 async function loadMedia(path) {
   try {
     $('#video-status').classList.remove('hidden');
@@ -379,11 +421,12 @@ async function loadMedia(path) {
 
 // ====== Viewer Overlay ======
 let overlayTimer = null;
-$('#viewer-overlay').addEventListener('click', () => {
+// Show overlay on any tap/click in the video area
+$('#video-container').addEventListener('click', () => {
   clearTimeout(overlayTimer);
   $('#viewer-overlay').classList.add('active');
   updatePlayerUI();
-  overlayTimer = setTimeout(() => $('#viewer-overlay').classList.remove('active'), 5000);
+  overlayTimer = setTimeout(() => $('#viewer-overlay').classList.remove('active'), 4000);
 });
 
 // ====== UI Updates ======

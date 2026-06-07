@@ -222,6 +222,62 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// UploadSubtitle handles subtitle file upload from host's browser.
+func (h *Handler) UploadSubtitle(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 10<<20) // 10MB max for subtitles
+
+	if err := r.ParseMultipartForm(4 << 20); err != nil {
+		writeError(w, http.StatusBadRequest, "file too large or invalid form")
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "missing file field")
+		return
+	}
+	defer file.Close()
+
+	// Save subtitle file
+	safeName := filepath.Base(header.Filename)
+	dstPath := filepath.Join(h.UploadDir, safeName)
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save file")
+		return
+	}
+	defer dst.Close()
+
+	if _, err := io.Copy(dst, file); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to write file")
+		return
+	}
+
+	// Read and load the subtitle
+	format, content, err := media.ReadSubtitleFile(dstPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read subtitle")
+		return
+	}
+
+	// Add to room subtitles
+	sub := media.SubtitleInfo{Path: dstPath, Format: format, Index: 0}
+	h.Room.SetSubtitles([]media.SubtitleInfo{sub})
+
+	// Broadcast to all viewers
+	h.Room.Hub().Broadcast(signaling.Message{
+		Type: "subtitle",
+		Text: content,
+		From: format,
+	})
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status":  "ok",
+		"format":  format,
+		"index":   0,
+	})
+}
+
 // ServeFile serves local media files to viewers.
 func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")

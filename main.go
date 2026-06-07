@@ -102,6 +102,7 @@ func main() {
 	mux.Handle("POST /api/playback/audio", apiRouter.HostOnly(handler.SwitchAudio))
 	mux.Handle("POST /api/playback/subtitle", apiRouter.HostOnly(handler.SwitchSubtitle))
 	mux.Handle("POST /api/upload", apiRouter.HostOnly(handler.Upload))
+	mux.Handle("POST /api/upload/subtitle", apiRouter.HostOnly(handler.UploadSubtitle))
 	mux.Handle("GET /api/media/file", apiRouter.AuthRequired(handler.ServeFile))
 	mux.Handle("GET /api/status", apiRouter.AuthRequired(handler.Status))
 	mux.Handle("GET /api/media/info", apiRouter.AuthRequired(handler.MediaInfo))
