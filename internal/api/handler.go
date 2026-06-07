@@ -71,17 +71,12 @@ func (h *Handler) Play(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	h.Room.SetMedia(req.Path, sourceType)
-
-	// Broadcast media change to all viewers
 	url := h.Room.GetMediaURL()
+
+	// Broadcast media URL change so viewers load the new source
 	h.Room.Hub().Broadcast(signaling.Message{
-		Type: signaling.MsgState,
-		PlayState: &signaling.PlaybackState{
-			Playing:  true,
-			Position: 0,
-			Speed:    h.Room.GetSpeed(),
-		},
-		Text: url,
+		Type:     signaling.MsgMedia,
+		MediaURL: url,
 	})
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -199,8 +194,13 @@ func (h *Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Save file
-	dstPath := filepath.Join(h.UploadDir, header.Filename)
+	// Save file — sanitize filename to prevent path traversal
+	safeName := filepath.Base(header.Filename)
+	if safeName == "." || safeName == ".." {
+		writeError(w, http.StatusBadRequest, "invalid filename")
+		return
+	}
+	dstPath := filepath.Join(h.UploadDir, safeName)
 	dst, err := os.Create(dstPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save file")
@@ -230,17 +230,27 @@ func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Security: only allow files within scan dirs or upload dir
+	// Security: resolve and verify path is within allowed dirs
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	cleanPath := filepath.Clean(absPath)
+
 	allowed := false
-	absPath, _ := filepath.Abs(path)
 	for _, dir := range h.AllowedDirs() {
-		absDir, _ := filepath.Abs(dir)
-		if strings.HasPrefix(absPath, absDir) {
+		absDir, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(cleanPath, absDir+string(filepath.Separator)) || cleanPath == absDir {
 			allowed = true
 			break
 		}
 	}
-	if absPath == h.UploadDir || strings.HasPrefix(absPath, h.UploadDir+string(filepath.Separator)) {
+	uploadAbs, _ := filepath.Abs(h.UploadDir)
+	if strings.HasPrefix(cleanPath, uploadAbs+string(filepath.Separator)) || cleanPath == uploadAbs {
 		allowed = true
 	}
 	if !allowed {
@@ -248,7 +258,7 @@ func (h *Handler) ServeFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.ServeFile(w, r, path)
+	http.ServeFile(w, r, cleanPath)
 }
 
 // AllowedDirs returns dirs that are allowed for file serving.

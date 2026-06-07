@@ -44,6 +44,7 @@
         <div id="viewer-overlay" class="viewer-overlay">
           <div class="viewer-progress"><div id="viewer-position"></div></div>
           <span id="viewer-time">00:00 / 00:00</span>
+          <button id="btn-viewer-fullscreen" style="margin-top:0.5rem;background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.2);padding:0.4rem;border-radius:4px;font-size:0.85rem">⛶ 全屏</button>
         </div>
       </div>
 
@@ -75,9 +76,6 @@
         </div>
       </div>
 
-      <!-- Status Bar -->
-      </div>
-
     <!-- Admin Screen -->
     <div id="admin-screen" class="screen">
       <div id="admin-login-panel" class="login-container">
@@ -101,10 +99,6 @@
           <div class="stat-card">
             <span class="stat-label">当前影片</span>
             <span class="stat-value" id="admin-media">无</span>
-          </div>
-          <div class="stat-card">
-            <span class="stat-label">转码状态</span>
-            <span class="stat-value" id="admin-transcode">闲置</span>
           </div>
         </div>
         <button onclick="navigate('player')">返回播放器</button>

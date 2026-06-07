@@ -322,10 +322,13 @@ $('#btn-force-sync').addEventListener('click', async () => {
   } catch (e) { console.error(e); }
 });
 
-$('#btn-fullscreen').addEventListener('click', () => {
+$('#btn-fullscreen').addEventListener('click', toggleFullscreen);
+$('#btn-viewer-fullscreen')?.addEventListener('click', toggleFullscreen);
+
+function toggleFullscreen() {
   const el = $('#video-container');
   document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
-});
+}
 
 // File/URL
 $('#btn-open-file').addEventListener('click', () => {
