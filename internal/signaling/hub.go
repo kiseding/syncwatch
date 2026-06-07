@@ -190,27 +190,6 @@ func (h *Hub) Broadcast(msg Message) {
 	}
 }
 
-// BroadcastExcept sends a message to all clients except one.
-func (h *Hub) BroadcastExcept(msg Message, exceptID string) {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return
-	}
-
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	for id, client := range h.clients {
-		if id == exceptID {
-			continue
-		}
-		select {
-		case client.Send <- data:
-		default:
-		}
-	}
-}
-
 // SendSystem sends a system message to all clients.
 func (h *Hub) SendSystem(text string) {
 	h.Broadcast(Message{
@@ -219,13 +198,6 @@ func (h *Hub) SendSystem(text string) {
 		System:    true,
 		Timestamp: time.Now().UnixMilli(),
 	})
-}
-
-// ClientCount returns the number of connected clients.
-func (h *Hub) ClientCount() int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return len(h.clients)
 }
 
 // writePump pumps messages from the Send channel to the WebSocket connection.

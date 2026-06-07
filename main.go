@@ -111,8 +111,8 @@ func main() {
 	// Debug endpoint
 	mux.HandleFunc("GET /api/debug", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"ws_clients":%d,"state":"%s","position":%.1f,"media_url":"%s"}`,
-			hub.ClientCount(), room.State().String(), room.GetPosition(), room.GetMediaURL())
+		fmt.Fprintf(w, `{"state":"%s","position":%.1f,"media_url":"%s"}`,
+			room.State().String(), room.GetPosition(), room.GetMediaURL())
 	})
 
 	// WebSocket signaling

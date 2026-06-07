@@ -59,7 +59,6 @@ function enterHost() {
   navigate('player');
   $('#host-controls').classList.remove('hidden');
   $('#viewer-overlay').classList.add('hidden');
-  $('#status-bar').style.display = 'none';
   connectWebSocket();
 }
 
@@ -67,27 +66,16 @@ function enterHost() {
 function connectWebSocket() {
   const token = store.get('token');
   if (!token) { console.warn('[SyncWatch] No token, skipping WS'); return; }
-  store.set('connection.status', 'connecting');
-  updateConnectionUI();
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${proto}//${location.host}/ws?token=${encodeURIComponent(token)}`;
   console.log('[SyncWatch] WS connect');
   ws = new WebSocket(url);
 
-  ws.onopen = () => {
-    console.log('[SyncWatch] WS open');
-    store.set('connection.status', 'connected');
-    updateConnectionUI();
-  };
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    handleWSMessage(msg);
-  };
+  ws.onopen = () => console.log('[SyncWatch] WS open');
+  ws.onmessage = (e) => handleWSMessage(JSON.parse(e.data));
   ws.onclose = (ev) => {
     console.warn('[SyncWatch] WS close', ev.code);
-    store.set('connection.status', 'disconnected');
-    updateConnectionUI();
     setTimeout(connectWebSocket, 1000);
   };
   ws.onerror = () => console.error('[SyncWatch] WS error');
@@ -111,7 +99,6 @@ function handleWSMessage(msg) {
       initSubtitle(msg.from, msg.text);
       break;
     case 'system':
-      updateViewerCount(msg.text);
       break;
   }
 }
@@ -397,12 +384,6 @@ $('#viewer-overlay').addEventListener('click', () => {
 });
 
 // ====== UI Updates ======
-function updateConnectionUI() {
-  const s = store.get('connection.status');
-  const dot = $('#connection-status');
-  if (dot) dot.className = 'status-dot ' + s;
-}
-
 function updatePlayerUI() {
   const p = store.get('playback'), d = p.duration || 0;
   const pct = d > 0 ? Math.min(100, (p.position / d) * 100) : 0;
@@ -422,19 +403,13 @@ function updatePlayerUI() {
     : '<svg width="24" height="24" viewBox="0 0 24 24"><polygon points="8,5 19,12 8,19" fill="currentColor"/></svg>';
 }
 
-function updateViewerCount(text) {
-  // System messages only — viewer count not displayed
-}
-
 // ====== Admin ======
 async function updateAdmin() {
   if (!store.get('token')) return;
   try {
     const s = await api.status();
-    $('#admin-viewers').textContent = s.viewers || 0;
     $('#admin-state').textContent = s.state || '空闲';
     $('#admin-media').textContent = s.media_url || '无';
-    $('#admin-transcode').textContent = s.state || '空闲';
   } catch (e) {}
 }
 

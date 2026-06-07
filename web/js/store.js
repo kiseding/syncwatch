@@ -6,12 +6,8 @@ class Store {
       role: localStorage.getItem('syncwatch_role') || 'viewer',
       screen: 'login',
 
-      connection: { status: 'disconnected', iceState: 'new' },
-      playback: { state: 'idle', position: 0, duration: 0, speed: 1.0 },
+      playback: { state: 'idle', position: 0, duration: 0, speed: 1.0, mediaURL: null },
       media: { filename: null, audioTracks: [], subtitleTracks: [], selectedAudio: 0, selectedSubtitle: -1 },
-      chat: { messages: [] },
-      viewers: 0,
-      error: null,
     };
     this.listeners = new Map();
   }
@@ -40,7 +36,6 @@ class Store {
   notify(path) {
     const fns = this.listeners.get(path);
     if (fns) fns.forEach(fn => fn(this.get(path)));
-    // Also notify parent paths
     const parts = path.split('.');
     while (parts.length > 0) {
       parts.pop();
