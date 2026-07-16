@@ -1,5 +1,7 @@
 # SyncWatch
 
+[![Docker build](https://github.com/kiseding/syncwatch/actions/workflows/docker.yml/badge.svg)](https://github.com/kiseding/syncwatch/actions/workflows/docker.yml)
+
 SyncWatch 是一个单 Host 的私有同步观影服务。Host 选择服务器媒体、上传文件或输入网络视频 URL，Viewer 在浏览器登录后会同步播放状态、进度、倍速、音轨和字幕。
 
 ## 功能

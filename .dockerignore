@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+web/node_modules
+web/dist
+data
+media
+uploads
+*.log
+syncwatch
