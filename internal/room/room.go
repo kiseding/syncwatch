@@ -1,6 +1,8 @@
 package room
 
 import (
+	"fmt"
+	"net/url"
 	"sync"
 	"time"
 
@@ -12,7 +14,7 @@ import (
 type State int32
 
 const (
-	StateIdle    State = iota
+	StateIdle State = iota
 	StatePlaying
 	StatePaused
 )
@@ -45,7 +47,8 @@ type Room struct {
 	mu sync.RWMutex
 
 	// Current media source
-	mediaURL   string     // URL viewers should load (remote / local serve / upload serve)
+	mediaURL   string // URL viewers should load (remote / local serve / upload serve)
+	mediaPath  string // original URL or local filesystem path
 	mediaInfo  *media.MediaInfo
 	sourceType SourceType
 
@@ -62,9 +65,6 @@ type Room struct {
 	subFormat   string
 	subContent  string
 
-	// Server base URL for constructing local/upload media URLs
-	serverBaseURL string
-
 	// WebSocket hub (kept for broadcasting state)
 	hub *signaling.Hub
 
@@ -77,16 +77,15 @@ type Room struct {
 }
 
 // NewRoom creates a new room.
-func NewRoom(hub *signaling.Hub, serverBaseURL, uploadDir string) *Room {
+func NewRoom(hub *signaling.Hub, uploadDir string) *Room {
 	return &Room{
-		speed:         1.0,
-		audioIndex:    0,
-		subIndex:      -1,
-		hub:           hub,
-		serverBaseURL: serverBaseURL,
-		uploadDir:     uploadDir,
-		createdAt:     time.Now(),
-		lastActive:    time.Now(),
+		speed:      1.0,
+		audioIndex: 0,
+		subIndex:   -1,
+		hub:        hub,
+		uploadDir:  uploadDir,
+		createdAt:  time.Now(),
+		lastActive: time.Now(),
 	}
 }
 
@@ -99,18 +98,40 @@ func (r *Room) SetMedia(path string, sourceType SourceType) {
 	defer r.mu.Unlock()
 
 	r.sourceType = sourceType
+	r.mediaPath = path
 	r.position = 0
 	r.state = StatePlaying
 	r.lastActive = time.Now()
+	r.mediaInfo = nil
+	r.audioTracks = nil
+	r.subs = nil
+	r.audioIndex = 0
+	r.subIndex = -1
+	r.subFormat = ""
+	r.subContent = ""
 
 	switch sourceType {
 	case SourceURL:
 		r.mediaURL = path
 	case SourceLocal, SourceUpload:
-		r.mediaURL = r.serverBaseURL + "/api/media/file?path=" + path
+		r.mediaURL = "/api/media/file?" + url.Values{"path": []string{path}}.Encode()
 	}
 
 	r.broadcastState()
+}
+
+// IsCurrentMedia reports whether path is still the selected source.
+func (r *Room) IsCurrentMedia(path string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.mediaPath == path
+}
+
+// HasMedia reports whether the room currently has a selected source.
+func (r *Room) HasMedia() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.mediaPath != ""
 }
 
 // SetMediaInfo stores ffprobe metadata and broadcasts updated track info.
@@ -133,6 +154,24 @@ func (r *Room) SetSubtitles(subs []media.SubtitleInfo) {
 		}
 	}
 	r.broadcastRoomInfo()
+}
+
+// AddSubtitle appends and selects a subtitle uploaded by the host.
+func (r *Room) AddSubtitle(sub media.SubtitleInfo) error {
+	format, content, err := media.ReadSubtitleFile(sub.Path)
+	if err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sub.Index = len(r.subs)
+	r.subs = append(r.subs, sub)
+	r.subIndex = sub.Index
+	r.subFormat = format
+	r.subContent = content
+	r.broadcastRoomInfo()
+	return nil
 }
 
 // Pause pauses playback.
@@ -161,16 +200,18 @@ func (r *Room) Resume() {
 func (r *Room) Seek(position float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.position = position
+	r.position = r.clampPosition(position)
 	r.state = StatePlaying
 	r.lastActive = time.Now()
 
 	r.hub.Broadcast(signaling.Message{
 		Type: signaling.MsgSync,
 		PlayState: &signaling.PlaybackState{
-			Playing:  true,
-			Position: position,
-			Speed:    r.speed,
+			Playing:       true,
+			Position:      r.position,
+			Speed:         r.speed,
+			AudioIndex:    r.audioIndex,
+			SubtitleIndex: r.subIndex,
 		},
 	})
 }
@@ -180,14 +221,16 @@ func (r *Room) Seek(position float64) {
 func (r *Room) SyncPosition(position float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.position = position
+	r.position = r.clampPosition(position)
 
 	r.hub.Broadcast(signaling.Message{
 		Type: signaling.MsgSync,
 		PlayState: &signaling.PlaybackState{
-			Playing:  r.state == StatePlaying,
-			Position: position,
-			Speed:    r.speed,
+			Playing:       r.state == StatePlaying,
+			Position:      r.position,
+			Speed:         r.speed,
+			AudioIndex:    r.audioIndex,
+			SubtitleIndex: r.subIndex,
 		},
 	})
 }
@@ -201,11 +244,15 @@ func (r *Room) SetSpeed(speed float64) {
 }
 
 // SwitchAudioTrack switches the audio track.
-func (r *Room) SwitchAudioTrack(index int) {
+func (r *Room) SwitchAudioTrack(index int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if index < 0 || (len(r.audioTracks) > 0 && index >= len(r.audioTracks)) {
+		return fmt.Errorf("audio track index out of range")
+	}
 	r.audioIndex = index
 	r.broadcastState()
+	return nil
 }
 
 // SwitchSubtitle switches subtitle track.
@@ -217,7 +264,7 @@ func (r *Room) SwitchSubtitle(index int) error {
 		r.subIndex = -1
 		r.subFormat = ""
 		r.subContent = ""
-		r.broadcastState()
+		r.broadcastRoomInfo()
 		return nil
 	}
 
@@ -228,7 +275,7 @@ func (r *Room) SwitchSubtitle(index int) error {
 	r.subIndex = index
 	r.subFormat = format
 	r.subContent = content
-	r.broadcastState()
+	r.broadcastRoomInfo()
 	return nil
 }
 
@@ -245,7 +292,12 @@ func (r *Room) GetMediaURL() string {
 func (r *Room) GetMediaInfo() *media.MediaInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.mediaInfo
+	if r.mediaInfo == nil {
+		return nil
+	}
+	copyInfo := *r.mediaInfo
+	copyInfo.Tracks = append([]media.TrackInfo(nil), r.mediaInfo.Tracks...)
+	return &copyInfo
 }
 
 // State returns current playback state.
@@ -287,14 +339,14 @@ func (r *Room) GetSubIndex() int {
 func (r *Room) GetAudioTracks() []media.TrackInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.audioTracks
+	return append([]media.TrackInfo(nil), r.audioTracks...)
 }
 
 // GetSubtitles returns available subtitles.
 func (r *Room) GetSubtitles() []media.SubtitleInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.subs
+	return append([]media.SubtitleInfo(nil), r.subs...)
 }
 
 // GetSubtitleData returns current subtitle data.
@@ -336,14 +388,26 @@ func (r *Room) Stats() map[string]interface{} {
 	}
 }
 
+func (r *Room) clampPosition(position float64) float64 {
+	if position < 0 {
+		return 0
+	}
+	if r.mediaInfo != nil && r.mediaInfo.Duration > 0 && position > r.mediaInfo.Duration {
+		return r.mediaInfo.Duration
+	}
+	return position
+}
+
 // broadcastState sends current playback state to all viewers.
 func (r *Room) broadcastState() {
 	r.hub.Broadcast(signaling.Message{
 		Type: signaling.MsgState,
 		PlayState: &signaling.PlaybackState{
-			Playing:  r.state == StatePlaying,
-			Position: r.position,
-			Speed:    r.speed,
+			Playing:       r.state == StatePlaying,
+			Position:      r.position,
+			Speed:         r.speed,
+			AudioIndex:    r.audioIndex,
+			SubtitleIndex: r.subIndex,
 		},
 	})
 }
@@ -371,11 +435,24 @@ func (r *Room) broadcastRoomInfo() {
 	r.hub.Broadcast(signaling.Message{
 		Type: signaling.MsgJoined,
 		RoomState: &signaling.RoomState{
+			State:         r.state.String(),
+			Position:      r.position,
+			Speed:         r.speed,
 			Media:         &signaling.MediaState{Filename: r.mediaURL, Duration: dur},
+			Subtitle:      r.currentSubtitleData(),
 			AudioTracks:   audioTracks,
 			SubTracks:     subTracks,
 			SelectedAudio: r.audioIndex,
 			SelectedSub:   r.subIndex,
 		},
 	})
+}
+
+func (r *Room) currentSubtitleData() *signaling.SubtitleData {
+	if r.subIndex < 0 || r.subContent == "" {
+		return nil
+	}
+	return &signaling.SubtitleData{
+		Format: r.subFormat, Content: r.subContent, Index: r.subIndex,
+	}
 }

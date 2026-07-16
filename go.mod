@@ -3,6 +3,7 @@ module github.com/kiseding/syncwatch
 go 1.25.0
 
 require (
+	github.com/asticode/go-astisub v0.42.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/gorilla/websocket v1.5.3
 	github.com/rs/zerolog v1.35.1
@@ -12,7 +13,11 @@ require (
 )
 
 require (
+	github.com/asticode/go-astikit v0.20.0 // indirect
+	github.com/asticode/go-astits v1.8.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	golang.org/x/net v0.53.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 )

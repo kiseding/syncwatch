@@ -23,7 +23,7 @@ clean:
 	rm -f $(BINARY)
 	rm -rf web/dist
 
-test:
+test: frontend
 	$(GO) test ./...
 
 docker:

@@ -1,52 +1,56 @@
-# SyncWatch — 私人异地同步观影
+# SyncWatch
 
-单 Host 模式的私人异地同步观影系统。
+SyncWatch 是一个单 Host 的私有同步观影服务。Host 选择服务器媒体、上传文件或输入网络视频 URL，Viewer 在浏览器登录后会同步播放状态、进度、倍速、音轨和字幕。
 
-Host 选择影片，Viewer 通过浏览器输入密码即可同步观看。所有 Viewer 看到完全一致的播放进度、音轨和字幕。
+## 功能
 
-## 特性
+- Host 控制播放、暂停、跳转、倍速和强制同步
+- 本地媒体库、浏览器上传、HTTP(S) 视频 URL 和 HLS/m3u8
+- ASS/SSA/SRT/VTT 外挂字幕，支持自动发现和浏览器上传
+- HLS 多音轨切换；普通视频在浏览器提供 `audioTracks` API 时支持多音轨
+- WebSocket 实时同步、自动重连和房间聊天
+- Viewer 音量、静音、全屏和移动端布局
+- Argon2id 密码哈希、JWT 角色鉴权、登录限流和媒体目录边界校验
+- PWA、TLS、Docker 和单二进制部署
 
-- 🎬 **一人播放，多人同步** — 播放 / 暂停 / 进度 / 倍速完全一致
-- 🔗 **HTTP 直链传输** — 视频文件直接 HTTP 分发，支持 HLS/m3u8 / MP4 / WebM
-- 📝 **完整字幕支持** — ASS/SSA 特效（描边、阴影、字体样式），SRT/VTT
-- 🎵 **多音轨** — 自动检测、一键切换
-- ⚡ **倍速播放** — 0.5x / 1x / 1.25x / 1.5x / 2x
-- 💬 **在线聊天** — 文本消息 + 系统通知
-- 📱 **PWA** — 手机/桌面安装，全屏运行，响应式布局
-- 🔒 **安全** — Argon2 密码哈希、JWT 鉴权、登录限流
-- 🐳 **单二进制部署** — ~13MB 静态编译，支持 Linux / Docker / NAS
+> 媒体是否能直接播放取决于浏览器支持的容器与编码。兼容性最好的是 H.264/AAC MP4、WebM 和 HLS。MKV/AVI 可以被媒体库识别，但浏览器不支持其中的编码时需要事先转码。
 
-## 快速开始
+## 直接运行
 
-### 直接运行
+要求 Go 1.25+、Node.js 22+。FFmpeg/FFprobe 用于媒体信息和音轨检测；没有安装时基础播放仍可使用。
 
 ```bash
-# 编译
-go build -o syncwatch .
-
-# 创建配置
 cp config.example.yaml config.yaml
-
-# 启动
+# 修改 config.yaml 的密码、媒体目录和上传目录
+make build
 ./syncwatch --config config.yaml
 ```
 
-打开对应地址：
-
-| 地址 | 用途 |
-|------|------|
-| `http://host-ip:8080/` | 观影入口（Viewer） |
-| `http://host-ip:8080/admin` | 管理入口（Host） |
-
-### Docker
+仓库包含已构建的前端，因此也可以直接执行：
 
 ```bash
-mkdir media data
-cp config.example.yaml data/config.yaml
-# 编辑 data/config.yaml，设置密码
-
-docker compose up -d
+go build -o syncwatch .
+./syncwatch --config config.yaml
 ```
+
+访问地址：
+
+- Viewer：`http://服务器地址:8080/`
+- Host：`http://服务器地址:8080/admin`
+- 健康检查：`http://服务器地址:8080/healthz`
+
+未提供配置文件时服务也能启动，默认 Viewer/Host 密码均为 `syncwatch`。正式部署必须修改密码并设置固定的 `jwt_secret`。
+
+## Docker
+
+```bash
+mkdir -p media data
+cp config.example.yaml data/config.yaml
+# 修改 data/config.yaml，至少设置 auth.password 和 auth.admin_password
+docker compose up -d --build
+```
+
+Compose 将 `./media` 只读挂载到 `/media`，将 `./data` 挂载到 `/data`。示例配置已经使用这两个容器路径。
 
 ## 配置
 
@@ -54,89 +58,57 @@ docker compose up -d
 server:
   host: "0.0.0.0"
   port: 8080
-  public_url: ""     # 公网地址，用于生成本地文件访问 URL
+  tls: false
+  cert_file: ""
+  key_file: ""
 
 media:
-  scan_dirs:                # 本地媒体文件扫描目录
-    - "/home/user/media"
-  allowed_extensions:       # 支持的视频格式
+  scan_dirs:
+    - "/media"
+  allowed_extensions:
     - ".mp4"
     - ".mkv"
     - ".avi"
     - ".mov"
     - ".webm"
-  upload_dir: "/tmp/syncwatch_uploads"
+  upload_dir: "/data/uploads"
 
 auth:
-  password: ""              # 观影密码（明文，自动转为 Argon2 哈希）
-  admin_password: ""        # 管理密码（不填则共用观影密码）
-  # password_hash: "$argon2id$..."   # 或直接填预生成哈希
+  password: "viewer-password"
+  admin_password: "host-password"
   rate_limit_per_min: 5
-  session_timeout: 86400    # 24 小时
-  jwt_secret: ""            # JWT 密钥（留空自动生成）
+  session_timeout: 86400
+  jwt_secret: "请替换为足够长的随机字符串"
 ```
 
-## 使用说明
+也可以用 `password_hash` 和 `admin_password_hash` 提供预生成的 Argon2id 哈希。明文密码只在启动时用于生成内存中的哈希，不会写回配置文件。
 
-### Host（管理者）
+## 字幕
 
-1. 打开 `http://host-ip:8080/admin`
-2. 输入管理密码，进入控制台
-3. 选择本地文件 / 上传视频 / 输入视频 URL
-4. 控制播放：Space 暂停、←→ 快退快进
+与视频同目录、同基础文件名的字幕会自动发现：
 
-管理功能：
-- 播放 / 暂停 / 跳转进度
-- 切换音轨 / 字幕
-- 调整倍速（0.5x–2x）
-- 上传视频文件、字幕文件
-- 支持网络视频 URL 和本地文件
-
-### Viewer（观看者）
-
-1. 打开 `http://host-ip:8080/`
-2. 输入观影密码
-3. 自动同步观看，无需任何操作
-
-### 字幕
-
-将字幕文件放在视频同目录下，与视频同名即可自动加载：
-
-```
+```text
 movie.mp4
-movie.ass     ← 自动加载
-movie.chi.srt ← 语言后缀也支持
+movie.ass
+movie.zh-CN.srt
 ```
 
-支持格式：ASS / SSA / SRT / VTT
+上传字幕后，当前房间会立即切换到该字幕；后来加入或重连的 Viewer 也会收到完整字幕状态。
 
-## 技术栈
+## 开发与验证
 
-| 层 | 技术 |
-|----|------|
-| 后端 | Go |
-| 媒体分析 | FFprobe（可选，用于音轨/字幕检测） |
-| 前端 | Vanilla JS + Vite + [JASSUB](https://github.com/ThaUnknown/jassub)（libass WASM） |
-| 传输 | HTTP ServeFile + WebSocket 信令 + HLS.js |
-| 认证 | Argon2id + JWT（HS256） |
-| 部署 | 单二进制 / Docker / docker-compose |
-
-## 项目结构
-
+```bash
+make frontend       # 构建 web/dist
+make test           # 构建前端并运行 Go 测试
+make build-release  # 静态发布二进制
 ```
-syncwatch/
-├── main.go                   # 入口
-├── internal/
-│   ├── config/               # YAML 配置加载
-│   ├── auth/                 # Argon2 密码 + JWT + 限流
-│   ├── media/                # FFprobe 探测 + 字幕提取
-│   ├── signaling/            # WebSocket 信令 + 聊天
-│   ├── room/                 # 播放状态管理
-│   └── api/                  # HTTP API + 中间件
-├── web/                      # 前端（Vite 构建，嵌入二进制）
-├── Dockerfile                # 多阶段构建
-├── docker-compose.yml
-└── config.example.yaml
+
+前端开发服务器：
+
+```bash
+cd web
+npm ci
+npm run dev
 ```
 
 ## 许可证

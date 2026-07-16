@@ -12,8 +12,8 @@ import (
 type contextKey string
 
 const (
-	ctxRole    contextKey = "role"
-	ctxToken   contextKey = "token"
+	ctxRole     contextKey = "role"
+	ctxToken    contextKey = "token"
 	ctxViewerID contextKey = "viewer_id"
 )
 
@@ -23,6 +23,8 @@ func CORSMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "same-origin")
 
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusNoContent)
@@ -90,13 +92,6 @@ func RateLimitMiddleware(rl *auth.RateLimiter, limitPerMin int) func(http.Handle
 
 // getClientIP extracts the client IP from the request, handling proxies.
 func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
-	}
-
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

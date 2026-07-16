@@ -21,7 +21,6 @@ FROM alpine:3.21
 RUN apk add --no-cache ffmpeg ca-certificates tzdata
 COPY --from=go-builder /src/syncwatch /usr/local/bin/syncwatch
 EXPOSE 8080
-EXPOSE 60000-60100/udp
 VOLUME ["/media", "/data"]
 ENTRYPOINT ["syncwatch"]
 CMD ["--config", "/data/config.yaml"]

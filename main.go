@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -60,7 +63,7 @@ func main() {
 		if err != nil {
 			logger.Fatal().Err(err).Msg("failed to generate default password hash")
 		}
-		logger.Info().Str("hash", defaultHash).Msg("no password set, using default: syncwatch")
+		logger.Warn().Msg("no password set, using default password: syncwatch")
 		cfg.Auth.PasswordHash = defaultHash
 	}
 
@@ -72,16 +75,11 @@ func main() {
 	// Auth
 	tokenManager := auth.NewTokenManager(cfg.Auth.JWTSecret, cfg.Auth.SessionTimeout)
 	rateLimiter := auth.NewRateLimiter()
-
-	// Server base URL for constructing media URLs
-	publicURL := cfg.Server.PublicURL
-	if publicURL == "" {
-		publicURL = fmt.Sprintf("http://%s:%d", cfg.Server.Host, cfg.Server.Port)
-	}
+	defer rateLimiter.Stop()
 
 	// Core components
 	hub := signaling.NewHub()
-	room := room.NewRoom(hub, publicURL, cfg.Media.UploadDir)
+	room := room.NewRoom(hub, cfg.Media.UploadDir)
 
 	// HTTP mux
 	mux := http.NewServeMux()
@@ -97,6 +95,10 @@ func main() {
 
 	mux.HandleFunc("POST /api/auth", apiRouter.HandleAuth)
 	mux.HandleFunc("POST /api/admin/auth", apiRouter.HandleAdminAuth)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"status":"ok"}`))
+	})
 	mux.Handle("POST /api/playback/play", apiRouter.HostOnly(handler.Play))
 	mux.Handle("POST /api/playback/pause", apiRouter.HostOnly(handler.Pause))
 	mux.Handle("POST /api/playback/resume", apiRouter.HostOnly(handler.Resume))
@@ -109,16 +111,18 @@ func main() {
 	mux.Handle("POST /api/upload/subtitle", apiRouter.HostOnly(handler.UploadSubtitle))
 	mux.Handle("GET /api/media/file", apiRouter.AuthRequired(handler.ServeFile))
 	mux.Handle("GET /api/status", apiRouter.AuthRequired(handler.Status))
-	mux.Handle("GET /api/media/info", apiRouter.AuthRequired(handler.MediaInfo))
-	mux.Handle("GET /api/media/scan", apiRouter.AuthRequired(handler.MediaScan))
+	mux.Handle("GET /api/media/info", apiRouter.HostOnly(handler.MediaInfo))
+	mux.Handle("GET /api/media/scan", apiRouter.HostOnly(handler.MediaScan))
 	mux.Handle("GET /api/state", apiRouter.AuthRequired(handler.SignalingState))
 
-	// Debug endpoint
-	mux.HandleFunc("GET /api/debug", func(w http.ResponseWriter, r *http.Request) {
+	// Diagnostics are host-only because they include the current media location.
+	mux.Handle("GET /api/debug", apiRouter.HostOnly(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"state":"%s","position":%.1f,"media_url":"%s"}`,
-			room.State().String(), room.GetPosition(), room.GetMediaURL())
-	})
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"state": room.State().String(), "position": room.GetPosition(),
+			"media_url": room.GetMediaURL(), "ws_clients": hub.ClientCount(),
+		})
+	}))
 
 	// WebSocket signaling
 	setupWebSocket(mux, tokenManager, hub, room, &logger)
@@ -128,11 +132,10 @@ func main() {
 
 	// HTTP server
 	server := &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
-		Handler:      api.CORSMiddleware(mux),
-		ReadTimeout:  60 * time.Second, // Allow large uploads
-		WriteTimeout: 60 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:              fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
+		Handler:           api.CORSMiddleware(mux),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Graceful shutdown
@@ -147,8 +150,17 @@ func main() {
 	}()
 
 	logger.Info().Str("addr", server.Addr).Msg("syncwatch server starting")
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Fatal().Err(err).Msg("server failed")
+	var serveErr error
+	if cfg.Server.TLS {
+		if cfg.Server.CertFile == "" || cfg.Server.KeyFile == "" {
+			logger.Fatal().Msg("TLS is enabled but cert_file or key_file is empty")
+		}
+		serveErr = server.ListenAndServeTLS(cfg.Server.CertFile, cfg.Server.KeyFile)
+	} else {
+		serveErr = server.ListenAndServe()
+	}
+	if serveErr != nil && serveErr != http.ErrServerClosed {
+		logger.Fatal().Err(serveErr).Msg("server failed")
 	}
 	logger.Info().Msg("server stopped")
 }
@@ -158,7 +170,14 @@ func setupWebSocket(mux *http.ServeMux, tm *auth.TokenManager,
 	hub *signaling.Hub, r *room.Room, logger *zerolog.Logger) {
 
 	upgrader := websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				return true
+			}
+			u, err := url.Parse(origin)
+			return err == nil && strings.EqualFold(u.Host, r.Host)
+		},
 	}
 
 	mux.HandleFunc("GET /ws", func(w http.ResponseWriter, req *http.Request) {
@@ -179,21 +198,32 @@ func setupWebSocket(mux *http.ServeMux, tm *auth.TokenManager,
 		viewerID := fmt.Sprintf("viewer-%d", time.Now().UnixNano())
 		logger.Info().Str("viewer", viewerID).Str("role", claims.Role).Str("remote", req.RemoteAddr).Msg("ws connected")
 
-		// Register WS client
-		client := hub.Register(viewerID, claims.Role, conn)
-
-		// Send current room state (joined message)
-		sendJoined(client, r)
-
-		// Handle messages from this client
-		client.OnMessage = func(c *signaling.Client, msg signaling.Message) {
-			logger.Debug().Str("viewer", c.ID).Str("type", msg.Type).Msg("ws msg")
-		}
-
 		displayName := viewerID
 		if claims.Role == "host" {
 			displayName = "Host"
 		}
+
+		// Chat is the only client-originated room message.
+		onMessage := func(c *signaling.Client, msg signaling.Message) {
+			if msg.Type != signaling.MsgChat {
+				return
+			}
+			text := strings.TrimSpace(msg.Text)
+			if text == "" {
+				return
+			}
+			if len([]rune(text)) > 500 {
+				text = string([]rune(text)[:500])
+			}
+			hub.Broadcast(signaling.Message{
+				Type: signaling.MsgChat, Text: text, From: displayName,
+				Timestamp: time.Now().UnixMilli(),
+			})
+		}
+
+		// Register WS client, then send its initial room snapshot.
+		client := hub.Register(viewerID, claims.Role, conn, onMessage)
+		sendJoined(client, r)
 		hub.SendSystem(fmt.Sprintf("%s 加入了房间", displayName))
 
 		// Cleanup on disconnect

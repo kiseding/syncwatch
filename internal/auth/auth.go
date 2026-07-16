@@ -103,7 +103,7 @@ func (tm *TokenManager) Generate(role string) (string, error) {
 
 func (tm *TokenManager) Validate(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+		if t.Method != jwt.SigningMethodHS256 {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
 		return tm.secret, nil
@@ -163,6 +163,9 @@ func (rl *RateLimiter) cleanupLoop(interval, ttl time.Duration) {
 // Allow checks if the given key is allowed to proceed.
 // rateLimit is attempts per minute.
 func (rl *RateLimiter) Allow(key string, rateLimit int) bool {
+	if rateLimit <= 0 {
+		rateLimit = 5
+	}
 	rl.mu.RLock()
 	limiter, ok := rl.limiters[key]
 	rl.mu.RUnlock()
@@ -187,4 +190,14 @@ func (rl *RateLimiter) Allow(key string, rateLimit int) bool {
 		rl.mu.Unlock()
 	}
 	return limiter.Allow()
+}
+
+// Stop releases the cleanup goroutine.
+func (rl *RateLimiter) Stop() {
+	select {
+	case <-rl.stopCleanup:
+		return
+	default:
+		close(rl.stopCleanup)
+	}
 }

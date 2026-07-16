@@ -59,6 +59,8 @@ class Store {
     localStorage.removeItem('syncwatch_role');
     this.set('token', null);
     this.set('role', 'viewer');
+    this.set('playback', { state: 'idle', position: 0, duration: 0, speed: 1.0, mediaURL: null });
+    this.set('media', { filename: null, audioTracks: [], subtitleTracks: [], selectedAudio: 0, selectedSubtitle: -1 });
     this.set('screen', 'login');
   }
 }

@@ -1,11 +1,14 @@
 package media
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	astisub "github.com/asticode/go-astisub"
 )
 
 // SubtitleInfo describes a detected subtitle.
@@ -59,8 +62,79 @@ func ReadSubtitleFile(path string) (string, string, error) {
 		return "", "", err
 	}
 
-	ext := strings.TrimPrefix(filepath.Ext(path), ".")
-	return ext, string(data), nil
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
+	if ext != "srt" && ext != "vtt" {
+		return ext, string(data), nil
+	}
+
+	// JASSUB renders libass formats. Parse text subtitles with astisub and
+	// serialize them as SSA so SRT and WebVTT work without an FFmpeg install.
+	subtitles, err := astisub.OpenFile(path)
+	if err != nil {
+		return "", "", err
+	}
+	prepareForLibass(subtitles)
+	var converted bytes.Buffer
+	if err := subtitles.WriteToSSA(&converted); err != nil {
+		return "", "", err
+	}
+	return "ass", converted.String(), nil
+}
+
+func prepareForLibass(subtitles *astisub.Subtitles) {
+	playResX, playResY := 1920, 1080
+	if subtitles.Metadata == nil {
+		subtitles.Metadata = &astisub.Metadata{}
+	}
+	subtitles.Metadata.SSAScriptType = "v4.00+"
+	subtitles.Metadata.SSAPlayResX = &playResX
+	subtitles.Metadata.SSAPlayResY = &playResY
+
+	fontSize, outline, shadow := 64.0, 2.0, 1.0
+	borderStyle, alignment, margin, encoding := 1, 2, 24, 1
+	bold, italic := false, false
+	defaultStyle := &astisub.Style{
+		ID: "Default",
+		InlineStyle: &astisub.StyleAttributes{
+			SSAFontName: "Liberation Sans", SSAFontSize: &fontSize,
+			SSAPrimaryColour: astisub.ColorWhite,
+			SSAOutlineColour: astisub.ColorBlack,
+			SSABackColour:    astisub.ColorBlack,
+			SSABold:          &bold, SSAItalic: &italic,
+			SSABorderStyle: &borderStyle, SSAOutline: &outline, SSAShadow: &shadow,
+			SSAAlignment:  &alignment,
+			SSAMarginLeft: &margin, SSAMarginRight: &margin, SSAMarginVertical: &margin,
+			SSAEncoding: &encoding,
+		},
+	}
+	if subtitles.Styles == nil {
+		subtitles.Styles = make(map[string]*astisub.Style)
+	}
+	subtitles.Styles[defaultStyle.ID] = defaultStyle
+	for _, item := range subtitles.Items {
+		item.Style = defaultStyle
+		for lineIndex := range item.Lines {
+			for itemIndex := range item.Lines[lineIndex].Items {
+				lineItem := &item.Lines[lineIndex].Items[itemIndex]
+				if lineItem.InlineStyle == nil {
+					continue
+				}
+				var tags strings.Builder
+				if lineItem.InlineStyle.SRTBold || lineItem.InlineStyle.WebVTTBold {
+					tags.WriteString(`\b1`)
+				}
+				if lineItem.InlineStyle.SRTItalics || lineItem.InlineStyle.WebVTTItalics {
+					tags.WriteString(`\i1`)
+				}
+				if lineItem.InlineStyle.SRTUnderline || lineItem.InlineStyle.WebVTTUnderline {
+					tags.WriteString(`\u1`)
+				}
+				if tags.Len() > 0 {
+					lineItem.InlineStyle.SSAEffect = "{" + tags.String() + "}"
+				}
+			}
+		}
+	}
 }
 
 // ExtractSubtitleTrack uses FFmpeg to extract an embedded subtitle track.

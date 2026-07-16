@@ -16,12 +16,11 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host      string `yaml:"host"`
-	Port      int    `yaml:"port"`
-	PublicURL string `yaml:"public_url"`
-	TLS       bool   `yaml:"tls"`
-	CertFile  string `yaml:"cert_file"`
-	KeyFile   string `yaml:"key_file"`
+	Host     string `yaml:"host"`
+	Port     int    `yaml:"port"`
+	TLS      bool   `yaml:"tls"`
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
 }
 
 type MediaConfig struct {
@@ -48,7 +47,7 @@ func DefaultConfig() *Config {
 		},
 		Media: MediaConfig{
 			AllowedExtensions: []string{".mp4", ".mkv", ".avi", ".mov", ".webm"},
-			UploadDir:         "/tmp/syncwatch_uploads",
+			UploadDir:         "data/uploads",
 		},
 		Auth: AuthConfig{
 			RateLimitPerMin: 5,
@@ -62,14 +61,13 @@ func Load(path string) (*Config, error) {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return cfg, nil
+		if !os.IsNotExist(err) {
+			return nil, err
 		}
-		return nil, err
-	}
-
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, err
+	} else {
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, err
+		}
 	}
 
 	if cfg.Auth.JWTSecret == "" {
@@ -80,7 +78,19 @@ func Load(path string) (*Config, error) {
 	}
 
 	if cfg.Media.UploadDir == "" {
-		cfg.Media.UploadDir = "/tmp/syncwatch_uploads"
+		cfg.Media.UploadDir = "data/uploads"
+	}
+	if cfg.Server.Host == "" {
+		cfg.Server.Host = "0.0.0.0"
+	}
+	if cfg.Server.Port <= 0 {
+		cfg.Server.Port = 8080
+	}
+	if cfg.Auth.RateLimitPerMin <= 0 {
+		cfg.Auth.RateLimitPerMin = 5
+	}
+	if cfg.Auth.SessionTimeout <= 0 {
+		cfg.Auth.SessionTimeout = 86400
 	}
 
 	return cfg, nil

@@ -4,13 +4,17 @@ services:
     container_name: syncwatch
     ports:
       - "8080:8080"
-      - "60000-60100:60000-60100/udp"
     volumes:
       - ./media:/media:ro
       - ./data:/data
     restart: unless-stopped
     environment:
       - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     # For hardware acceleration, uncomment:
     # devices:
     #   - /dev/dri:/dev/dri

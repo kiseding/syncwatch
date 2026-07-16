@@ -13,9 +13,10 @@ import (
 const (
 	MsgJoin   = "join"
 	MsgJoined = "joined"
-	MsgMedia  = "media"  // new media loaded, viewer should change video.src
+	MsgMedia  = "media" // new media loaded, viewer should change video.src
 	MsgState  = "state"
 	MsgSync   = "sync"
+	MsgChat   = "chat"
 	MsgSystem = "system"
 	MsgError  = "error"
 )
@@ -37,15 +38,15 @@ type Message struct {
 
 // RoomState sent to newly joined viewers.
 type RoomState struct {
-	State         string            `json:"state"`
-	Position      float64           `json:"position"`
-	Speed         float64           `json:"speed"`
-	Media         *MediaState       `json:"media,omitempty"`
-	Subtitle      *SubtitleData     `json:"subtitle,omitempty"`
-	AudioTracks   []TrackInfo       `json:"audio_tracks,omitempty"`
-	SubTracks     []TrackInfo       `json:"subtitle_tracks,omitempty"`
-	SelectedAudio int `json:"selected_audio"`
-	SelectedSub   int `json:"selected_sub"`
+	State         string        `json:"state"`
+	Position      float64       `json:"position"`
+	Speed         float64       `json:"speed"`
+	Media         *MediaState   `json:"media,omitempty"`
+	Subtitle      *SubtitleData `json:"subtitle,omitempty"`
+	AudioTracks   []TrackInfo   `json:"audio_tracks,omitempty"`
+	SubTracks     []TrackInfo   `json:"subtitle_tracks,omitempty"`
+	SelectedAudio int           `json:"selected_audio"`
+	SelectedSub   int           `json:"selected_sub"`
 }
 
 // MediaState describes the currently loaded media.
@@ -71,9 +72,11 @@ type TrackInfo struct {
 
 // PlaybackState broadcast to all viewers on state change.
 type PlaybackState struct {
-	Playing  bool    `json:"playing"`
-	Position float64 `json:"position"`
-	Speed    float64 `json:"speed"`
+	Playing       bool    `json:"playing"`
+	Position      float64 `json:"position"`
+	Speed         float64 `json:"speed"`
+	AudioIndex    int     `json:"audio_index"`
+	SubtitleIndex int     `json:"subtitle_index"`
 }
 
 // Client represents a WebSocket-connected client.
@@ -106,14 +109,15 @@ func NewHub() *Hub {
 }
 
 // Register adds a new WebSocket client and starts its read/write loops.
-func (h *Hub) Register(id, role string, conn *websocket.Conn) *Client {
+func (h *Hub) Register(id, role string, conn *websocket.Conn, onMessage func(*Client, Message)) *Client {
 	client := &Client{
-		ID:   id,
-		Role: role,
-		Conn: conn,
-		Send: make(chan []byte, 64),
-		Done: make(chan struct{}),
-		hub:  h,
+		ID:        id,
+		Role:      role,
+		Conn:      conn,
+		Send:      make(chan []byte, 64),
+		Done:      make(chan struct{}),
+		hub:       h,
+		OnMessage: onMessage,
 	}
 
 	h.mu.Lock()
@@ -200,6 +204,13 @@ func (h *Hub) SendSystem(text string) {
 		System:    true,
 		Timestamp: time.Now().UnixMilli(),
 	})
+}
+
+// ClientCount returns the number of connected WebSocket clients.
+func (h *Hub) ClientCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.clients)
 }
 
 // writePump pumps messages from the Send channel to the WebSocket connection.

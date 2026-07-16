@@ -4,18 +4,20 @@
 server:
   host: "0.0.0.0"
   port: 8080
-  public_url: ""     # Public URL for media file serving, e.g. "http://your-ip:8080"
+  tls: false
+  cert_file: ""
+  key_file: ""
 
 media:
   scan_dirs:                # Directories to scan for local media files
-    - "/home/user/media"
+    - "/media"
   allowed_extensions:
     - ".mp4"
     - ".mkv"
     - ".avi"
     - ".mov"
     - ".webm"
-  upload_dir: "/tmp/syncwatch_uploads"  # Host upload storage
+  upload_dir: "/data/uploads"  # Host upload storage
 
 auth:
   password: ""              # Viewer password (plain text, auto-hashed on start)
