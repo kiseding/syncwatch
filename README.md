@@ -63,7 +63,7 @@ SYNCWATCH_ADMIN_PASSWORD=a-different-admin-password
 SYNCWATCH_JWT_SECRET=<openssl rand -hex 32 的输出>
 ```
 
-Compose 通过 `env_file: .env` 将这些值直接传入容器，不需要在 `docker-compose.yml` 里写密码表达式。这些值会覆盖 `data/config.yaml` 中的 `auth.password`、`auth.admin_password` 和 `auth.jwt_secret`，因此 YAML 中的这三项可以留空。缺少任意一项时，容器会输出缺失的变量名并停止启动。
+Compose 在 `environment` 中明确列出这三项，并从 `.env` 读取实际值，因此密码不会写入仓库。这些值会覆盖 `data/config.yaml` 中的 `auth.password`、`auth.admin_password` 和 `auth.jwt_secret`，因此 YAML 中的这三项可以留空。缺少任意一项时，容器会输出缺失的变量名并停止启动。
 
 Compose 默认拉取公开镜像 `ghcr.io/kiseding/syncwatch:latest`，支持 `linux/amd64` 和 `linux/arm64`。升级服务：
 
