@@ -41,7 +41,7 @@ go build -o syncwatch .
 - Host：`http://服务器地址:8080/admin`
 - 健康检查：`http://服务器地址:8080/healthz`
 
-未提供配置文件时服务也能启动，默认 Viewer/Host 密码均为 `syncwatch`。正式部署必须修改密码并设置固定的 `jwt_secret`。
+直接运行二进制且未提供认证配置时，Viewer/Host 密码均默认为 `syncwatch`。下面的 Compose 配置会强制要求独立密码和固定 JWT 密钥，不允许使用该默认值。
 
 ## Docker
 
@@ -49,10 +49,21 @@ go build -o syncwatch .
 mkdir -p media data
 cp config.example.yaml data/config.yaml
 cp .env.example .env
-# 修改 .env 中的 Viewer/Host 密码，并使用 `openssl rand -hex 32` 生成 JWT 密钥
+# 生成 JWT 密钥，然后将输出和两个不同的密码写入 .env
+openssl rand -hex 32
 docker compose pull
 docker compose up -d
 ```
+
+`.env` 至少需要设置以下三项：
+
+```dotenv
+SYNCWATCH_VIEWER_PASSWORD=viewer-password
+SYNCWATCH_ADMIN_PASSWORD=a-different-admin-password
+SYNCWATCH_JWT_SECRET=<openssl rand -hex 32 的输出>
+```
+
+这些值会覆盖 `data/config.yaml` 中的 `auth.password`、`auth.admin_password` 和 `auth.jwt_secret`，因此 Compose 部署时 YAML 中的这三项可以留空。缺少任意一项时，`docker compose up` 会在创建容器前直接报错。
 
 Compose 默认拉取公开镜像 `ghcr.io/kiseding/syncwatch:latest`，支持 `linux/amd64` 和 `linux/arm64`。升级服务：
 
@@ -69,7 +80,7 @@ SYNCWATCH_TAG=sha-<完整提交号> SYNCWATCH_PORT=8090 TZ=Asia/Hong_Kong docker
 
 Compose 将 `./media` 只读挂载到 `/media`，将 `./data` 挂载到 `/data`，并使用只读根文件系统和独立的 `/tmp` 临时盘。示例配置已经使用这些容器路径。
 
-Compose 会在密码或 JWT 密钥缺失时拒绝启动。`.env` 中的 `SYNCWATCH_VIEWER_PASSWORD`、`SYNCWATCH_ADMIN_PASSWORD` 和 `SYNCWATCH_JWT_SECRET` 会覆盖 `data/config.yaml` 中对应的认证配置，`.env` 已被 Git 忽略。
+`.env` 已被 Git 和 Docker 构建上下文忽略，不会提交到仓库或打入镜像。
 
 ## 配置
 
