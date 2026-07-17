@@ -10,5 +10,10 @@ services:
     env_file:
       - .env
     environment:
+      # Values are read from .env; see .env.example for required settings.
+      TZ: "${TZ:-Asia/Shanghai}"
+      SYNCWATCH_VIEWER_PASSWORD: "${SYNCWATCH_VIEWER_PASSWORD}"
+      SYNCWATCH_ADMIN_PASSWORD: "${SYNCWATCH_ADMIN_PASSWORD}"
+      SYNCWATCH_JWT_SECRET: "${SYNCWATCH_JWT_SECRET}"
       SYNCWATCH_REQUIRE_AUTH_CONFIG: "true"
     restart: unless-stopped
