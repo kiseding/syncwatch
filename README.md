@@ -49,10 +49,24 @@ go build -o syncwatch .
 mkdir -p media data
 cp config.example.yaml data/config.yaml
 # 修改 data/config.yaml，至少设置 auth.password 和 auth.admin_password
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
-Compose 将 `./media` 只读挂载到 `/media`，将 `./data` 挂载到 `/data`。示例配置已经使用这两个容器路径。
+Compose 默认拉取公开镜像 `ghcr.io/kiseding/syncwatch:latest`，支持 `linux/amd64` 和 `linux/arm64`。升级服务：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+可以通过环境变量固定镜像标签、修改宿主机端口和时区：
+
+```bash
+SYNCWATCH_TAG=sha-<完整提交号> SYNCWATCH_PORT=8090 TZ=Asia/Hong_Kong docker compose up -d
+```
+
+Compose 将 `./media` 只读挂载到 `/media`，将 `./data` 挂载到 `/data`，并使用只读根文件系统和独立的 `/tmp` 临时盘。示例配置已经使用这些容器路径。
 
 ## 配置
 
