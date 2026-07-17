@@ -63,7 +63,7 @@ SYNCWATCH_ADMIN_PASSWORD=a-different-admin-password
 SYNCWATCH_JWT_SECRET=<openssl rand -hex 32 的输出>
 ```
 
-这些值会覆盖 `data/config.yaml` 中的 `auth.password`、`auth.admin_password` 和 `auth.jwt_secret`，因此 Compose 部署时 YAML 中的这三项可以留空。缺少任意一项时，`docker compose up` 会在创建容器前直接报错。
+Compose 通过 `env_file: .env` 将这些值直接传入容器，不需要在 `docker-compose.yml` 里写密码表达式。这些值会覆盖 `data/config.yaml` 中的 `auth.password`、`auth.admin_password` 和 `auth.jwt_secret`，因此 YAML 中的这三项可以留空。缺少任意一项时，容器会输出缺失的变量名并停止启动。
 
 Compose 默认拉取公开镜像 `ghcr.io/kiseding/syncwatch:latest`，支持 `linux/amd64` 和 `linux/arm64`。升级服务：
 
@@ -78,7 +78,7 @@ docker compose up -d
 SYNCWATCH_TAG=sha-<完整提交号> SYNCWATCH_PORT=8090 TZ=Asia/Hong_Kong docker compose up -d
 ```
 
-Compose 将 `./media` 只读挂载到 `/media`，将 `./data` 挂载到 `/data`，并使用只读根文件系统和独立的 `/tmp` 临时盘。示例配置已经使用这些容器路径。
+Compose 将 `./media` 只读挂载到 `/media`，将 `./data` 挂载到 `/data`。示例配置已经使用这些容器路径。
 
 `.env` 已被 Git 和 Docker 构建上下文忽略，不会提交到仓库或打入镜像。
 

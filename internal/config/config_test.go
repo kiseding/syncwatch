@@ -55,3 +55,21 @@ func TestLoadEnvironmentOverridesAuth(t *testing.T) {
 		t.Fatalf("environment overrides not applied: %#v", cfg.Auth)
 	}
 }
+
+func TestLoadRequiresAuthConfigWhenEnabled(t *testing.T) {
+	t.Setenv("SYNCWATCH_REQUIRE_AUTH_CONFIG", "true")
+	t.Setenv("SYNCWATCH_VIEWER_PASSWORD", "")
+	t.Setenv("SYNCWATCH_ADMIN_PASSWORD", "")
+	t.Setenv("SYNCWATCH_JWT_SECRET", "")
+
+	if _, err := Load(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
+		t.Fatal("expected missing authentication configuration to fail")
+	}
+
+	t.Setenv("SYNCWATCH_VIEWER_PASSWORD", "viewer")
+	t.Setenv("SYNCWATCH_ADMIN_PASSWORD", "admin")
+	t.Setenv("SYNCWATCH_JWT_SECRET", "fixed-secret")
+	if _, err := Load(filepath.Join(t.TempDir(), "missing.yaml")); err != nil {
+		t.Fatalf("complete authentication configuration was rejected: %v", err)
+	}
+}

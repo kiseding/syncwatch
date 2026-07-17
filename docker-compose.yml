@@ -1,36 +1,14 @@
-name: syncwatch
-
 services:
   syncwatch:
     image: ghcr.io/kiseding/syncwatch:${SYNCWATCH_TAG:-latest}
     pull_policy: always
-    container_name: syncwatch
-    init: true
     ports:
       - "${SYNCWATCH_PORT:-8080}:8080"
     volumes:
       - ./media:/media:ro
       - ./data:/data
-    restart: unless-stopped
+    env_file:
+      - .env
     environment:
-      TZ: ${TZ:-Asia/Shanghai}
-      SYNCWATCH_VIEWER_PASSWORD: "${SYNCWATCH_VIEWER_PASSWORD:?set SYNCWATCH_VIEWER_PASSWORD in .env}"
-      SYNCWATCH_ADMIN_PASSWORD: "${SYNCWATCH_ADMIN_PASSWORD:?set SYNCWATCH_ADMIN_PASSWORD in .env}"
-      SYNCWATCH_JWT_SECRET: "${SYNCWATCH_JWT_SECRET:?set SYNCWATCH_JWT_SECRET in .env}"
-    read_only: true
-    tmpfs:
-      - /tmp:size=256m,mode=1777
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    stop_grace_period: 15s
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    # For hardware acceleration, uncomment:
-    # devices:
-    #   - /dev/dri:/dev/dri
+      SYNCWATCH_REQUIRE_AUTH_CONFIG: "true"
+    restart: unless-stopped

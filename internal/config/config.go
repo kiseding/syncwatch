@@ -3,7 +3,10 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -71,6 +74,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyEnvironmentOverrides(cfg)
+	if err := validateRequiredAuth(cfg); err != nil {
+		return nil, err
+	}
 
 	if cfg.Auth.JWTSecret == "" {
 		secret := make([]byte, 32)
@@ -108,4 +114,33 @@ func applyEnvironmentOverrides(cfg *Config) {
 	if value := os.Getenv("SYNCWATCH_JWT_SECRET"); value != "" {
 		cfg.Auth.JWTSecret = value
 	}
+}
+
+func validateRequiredAuth(cfg *Config) error {
+	value := os.Getenv("SYNCWATCH_REQUIRE_AUTH_CONFIG")
+	if value == "" {
+		return nil
+	}
+	required, err := strconv.ParseBool(value)
+	if err != nil {
+		return fmt.Errorf("invalid SYNCWATCH_REQUIRE_AUTH_CONFIG: %w", err)
+	}
+	if !required {
+		return nil
+	}
+
+	missing := make([]string, 0, 3)
+	if cfg.Auth.Password == "" && cfg.Auth.PasswordHash == "" {
+		missing = append(missing, "SYNCWATCH_VIEWER_PASSWORD")
+	}
+	if cfg.Auth.AdminPassword == "" && cfg.Auth.AdminPasswordHash == "" {
+		missing = append(missing, "SYNCWATCH_ADMIN_PASSWORD")
+	}
+	if cfg.Auth.JWTSecret == "" {
+		missing = append(missing, "SYNCWATCH_JWT_SECRET")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("required authentication configuration is missing: %s", strings.Join(missing, ", "))
+	}
+	return nil
 }

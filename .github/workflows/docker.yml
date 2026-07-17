@@ -21,11 +21,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate Docker Compose
-        env:
-          SYNCWATCH_VIEWER_PASSWORD: ci-viewer-password
-          SYNCWATCH_ADMIN_PASSWORD: ci-admin-password
-          SYNCWATCH_JWT_SECRET: ci-only-jwt-secret-not-for-production
-        run: docker compose config --quiet
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
