@@ -14,6 +14,9 @@ services:
     restart: unless-stopped
     environment:
       TZ: ${TZ:-Asia/Shanghai}
+      SYNCWATCH_VIEWER_PASSWORD: "${SYNCWATCH_VIEWER_PASSWORD:?set SYNCWATCH_VIEWER_PASSWORD in .env}"
+      SYNCWATCH_ADMIN_PASSWORD: "${SYNCWATCH_ADMIN_PASSWORD:?set SYNCWATCH_ADMIN_PASSWORD in .env}"
+      SYNCWATCH_JWT_SECRET: "${SYNCWATCH_JWT_SECRET:?set SYNCWATCH_JWT_SECRET in .env}"
     read_only: true
     tmpfs:
       - /tmp:size=256m,mode=1777

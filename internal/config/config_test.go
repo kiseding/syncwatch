@@ -36,3 +36,22 @@ func TestLoadOverridesConfig(t *testing.T) {
 		t.Fatalf("overrides not loaded: %#v", cfg)
 	}
 }
+
+func TestLoadEnvironmentOverridesAuth(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := []byte("auth:\n  password: yaml-viewer\n  admin_password: yaml-admin\n  jwt_secret: yaml-secret\n")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SYNCWATCH_VIEWER_PASSWORD", "env-viewer")
+	t.Setenv("SYNCWATCH_ADMIN_PASSWORD", "env-admin")
+	t.Setenv("SYNCWATCH_JWT_SECRET", "env-secret")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Auth.Password != "env-viewer" || cfg.Auth.AdminPassword != "env-admin" || cfg.Auth.JWTSecret != "env-secret" {
+		t.Fatalf("environment overrides not applied: %#v", cfg.Auth)
+	}
+}

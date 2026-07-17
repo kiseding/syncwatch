@@ -70,6 +70,8 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
+	applyEnvironmentOverrides(cfg)
+
 	if cfg.Auth.JWTSecret == "" {
 		secret := make([]byte, 32)
 		if _, err := rand.Read(secret); err == nil {
@@ -94,4 +96,16 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func applyEnvironmentOverrides(cfg *Config) {
+	if value := os.Getenv("SYNCWATCH_VIEWER_PASSWORD"); value != "" {
+		cfg.Auth.Password = value
+	}
+	if value := os.Getenv("SYNCWATCH_ADMIN_PASSWORD"); value != "" {
+		cfg.Auth.AdminPassword = value
+	}
+	if value := os.Getenv("SYNCWATCH_JWT_SECRET"); value != "" {
+		cfg.Auth.JWTSecret = value
+	}
 }

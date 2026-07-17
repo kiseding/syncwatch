@@ -48,7 +48,8 @@ go build -o syncwatch .
 ```bash
 mkdir -p media data
 cp config.example.yaml data/config.yaml
-# 修改 data/config.yaml，至少设置 auth.password 和 auth.admin_password
+cp .env.example .env
+# 修改 .env 中的 Viewer/Host 密码，并使用 `openssl rand -hex 32` 生成 JWT 密钥
 docker compose pull
 docker compose up -d
 ```
@@ -67,6 +68,8 @@ SYNCWATCH_TAG=sha-<完整提交号> SYNCWATCH_PORT=8090 TZ=Asia/Hong_Kong docker
 ```
 
 Compose 将 `./media` 只读挂载到 `/media`，将 `./data` 挂载到 `/data`，并使用只读根文件系统和独立的 `/tmp` 临时盘。示例配置已经使用这些容器路径。
+
+Compose 会在密码或 JWT 密钥缺失时拒绝启动。`.env` 中的 `SYNCWATCH_VIEWER_PASSWORD`、`SYNCWATCH_ADMIN_PASSWORD` 和 `SYNCWATCH_JWT_SECRET` 会覆盖 `data/config.yaml` 中对应的认证配置，`.env` 已被 Git 忽略。
 
 ## 配置
 
@@ -98,6 +101,8 @@ auth:
 ```
 
 也可以用 `password_hash` 和 `admin_password_hash` 提供预生成的 Argon2id 哈希。明文密码只在启动时用于生成内存中的哈希，不会写回配置文件。
+
+直接运行二进制时也可以使用 `SYNCWATCH_VIEWER_PASSWORD`、`SYNCWATCH_ADMIN_PASSWORD` 和 `SYNCWATCH_JWT_SECRET` 环境变量覆盖 YAML 配置。
 
 ## 字幕
 
